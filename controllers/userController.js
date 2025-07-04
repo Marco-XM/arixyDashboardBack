@@ -5,19 +5,41 @@ const jwt = require('jsonwebtoken');
 
 const loginAdmin = async (req, res) => {
     try {
-        const { identifier, password } = req.body; // Use identifier instead of email
+        console.log('🔐 Admin login attempt:', req.body);
+        console.log('🔑 JWT_SECRET available:', !!process.env.JWT_SECRET);
+        console.log('🗄️ MongoDB URI available:', !!process.env.MONGO_URI);
+        
+        const { identifier, password } = req.body;
+        
+        if (!identifier || !password) {
+            console.log('❌ Missing credentials');
+            return res.status(400).send({ error: 'Identifier and password are required' });
+        }
+        
+        console.log('👤 Looking for admin with identifier:', identifier);
         const admin = await Admin.findOne({ $or: [{ email: identifier }, { username: identifier }] });
+        
         if (!admin) {
+            console.log('❌ Admin not found');
             return res.status(400).send({ error: 'Invalid login credentials' });
         }
+        
+        console.log('✅ Admin found:', admin.username);
         const isMatch = await bcrypt.compare(password, admin.password);
+        
         if (!isMatch) {
+            console.log('❌ Password mismatch');
             return res.status(400).send({ error: 'Invalid login credentials' });
         }
+        
+        console.log('🔑 Generating token...');
         const token = jwt.sign({ _id: admin._id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        
+        console.log('✅ Login successful');
         res.send({ admin, token });
     } catch (error) {
-        res.status(400).send(error);
+        console.error('❌ Login error:', error);
+        res.status(500).send({ error: 'Internal server error', details: error.message });
     }
 };
 

@@ -3,6 +3,17 @@ const { loginAdmin, loginUser, getUsers, createUser, deleteUser, getUserCount, v
 const auth = require('../middleware/auth');
 const router = express.Router();
 
+// Debug endpoint to check API health
+router.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    mongoUri: process.env.MONGO_URI ? 'Set' : 'Missing',
+    jwtSecret: process.env.JWT_SECRET ? 'Set' : 'Missing'
+  });
+});
+
 router.post('/admin/login', loginAdmin);
 router.post('/login', loginUser);
 router.get('/admins', auth, getAdmins);
