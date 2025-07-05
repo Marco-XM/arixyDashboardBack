@@ -178,6 +178,49 @@ const getUserName = async (req, res) => {
     }
 };
 
+const getDashboardStats = async (req, res) => {
+    try {
+        // Import models that we need for stats
+        const Card = require('../models/Card');
+        const Contact = require('../models/Contact');
+        
+        // Get all counts in parallel for better performance
+        // Exclude current admin from admin count (shows "other admins")
+        const [userCount, adminCount, cardsCount, contactStats] = await Promise.all([
+            User.countDocuments(),
+            Admin.countDocuments({ _id: { $ne: req.user._id } }), 
+            Card.countDocuments(),
+            Contact.aggregate([
+                {
+                    $group: {
+                        _id: "$status",
+                        count: { $sum: 1 }
+                    }
+                }
+            ])
+        ]);
+
+        // Process contact stats to get new contacts count
+        const contactsByStatus = {};
+        contactStats.forEach(stat => {
+            contactsByStatus[stat._id] = stat.count;
+        });
+
+        const stats = {
+            userCount,
+            adminCount,
+            cardsCount,
+            contactCount: contactsByStatus.new || 0,
+            lastUpdated: new Date().toISOString()
+        };
+
+        res.json(stats);
+    } catch (error) {
+        console.error('Error fetching dashboard stats:', error);
+        res.status(500).send({ error: 'Failed to fetch dashboard stats' });
+    }
+};
+
 module.exports = {
     loginAdmin,
     loginUser,
@@ -189,5 +232,6 @@ module.exports = {
     getUserCount,
     validateUserId,
     getUserName,
-    getAdminCount
+    getAdminCount,
+    getDashboardStats
 };

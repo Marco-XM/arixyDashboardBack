@@ -22,16 +22,16 @@ const upload = multer({ storage });
 router.post('/cards', auth,upload.single('image'), createCard);
 
 // @route   GET /api/cards
-// @desc    Get all cards
-router.get('/cards', auth, getAllCards);
+// @desc    Get all cards (public access for website)
+router.get('/cards', getAllCards);
 
 // @route   GET /api/cards/count
-// @desc    Get cards count
-router.get('/cards/count', auth, getCardsCount);
+// @desc    Get cards count (public access for website)
+router.get('/cards/count', getCardsCount);
 
 // @route   GET /api/cards/:id
-// @desc    Get a single card by ID
-router.get('/cards/:id', auth, getCardById);
+// @desc    Get a single card by ID (public access for website)
+router.get('/cards/:id', getCardById);
 
 // @route   PUT /api/cards/:id
 // @desc    Update card details

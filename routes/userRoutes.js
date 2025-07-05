@@ -1,5 +1,5 @@
 const express = require('express');
-const { loginAdmin, loginUser, getUsers, createUser, deleteUser, getUserCount, validateUserId, getAdmins, deleteAdmin, getUserName, getAdminCount } = require('../controllers/userController');
+const { loginAdmin, loginUser, getUsers, createUser, deleteUser, getUserCount, validateUserId, getAdmins, deleteAdmin, getUserName, getAdminCount, getDashboardStats } = require('../controllers/userController');
 const auth = require('../middleware/auth');
 const router = express.Router();
 
@@ -23,6 +23,7 @@ router.delete('/admins/:id', auth, deleteAdmin);
 router.delete('/users/:id', auth, deleteUser);
 router.get('/admins/count', auth, getAdminCount); // Add this line
 router.get('/users/count', auth, getUserCount);
+router.get('/dashboard/stats', auth, getDashboardStats); // Combined stats endpoint
 router.get('/validate-user-id', validateUserId);
 router.get('/users/username', auth, getUserName);
 
