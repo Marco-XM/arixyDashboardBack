@@ -6,6 +6,7 @@ const userRoutes = require('./routes/userRoutes');
 const cardRoutes = require('./routes/cardRoutes');
 const marketingRoutes = require('./routes/marketingRoutes');
 const contactRoutes = require('./routes/contactRoutes');
+const clientRoutes = require('./routes/clientRoutes');
 
 const app = express();
 const port = 5000;
@@ -25,6 +26,7 @@ app.use('/api', userRoutes);
 app.use('/api', cardRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api', contactRoutes);
+app.use('/api/clients', clientRoutes);
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);

@@ -6,12 +6,25 @@ const generateCardCode = () => `ARX-${Math.floor(1000 + Math.random() * 9000)}`;
 // Create a new card
 const createCard = async (req, res) => {
   try {
+    console.log('=== Card Creation Debug ===');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Request file:', req.file ? {
+      filename: req.file.filename,
+      path: req.file.path,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      originalname: req.file.originalname
+    } : 'NO FILE');
+
     const { title, description, code } = req.body;
     const image = req.file?.path;
 
     if (!title) {
+      console.log('❌ Missing title');
       return res.status(400).json({ message: 'Title is required' });
     }
+
+    console.log('Creating card with:', { title, description, code, image });
 
     const newCard = new Card({
       code: code || generateCardCode(),
@@ -21,9 +34,10 @@ const createCard = async (req, res) => {
     });
 
     await newCard.save();
+    console.log('✅ Card created successfully:', newCard._id);
     res.status(201).json(newCard);
   } catch (err) {
-    console.error('Error creating card:', err);
+    console.error('❌ Error creating card:', JSON.stringify(err, null, 2));
     res.status(500).json({ message: 'Error creating card', error: err.message });
   }
 };

@@ -183,10 +183,11 @@ const getDashboardStats = async (req, res) => {
         // Import models that we need for stats
         const Card = require('../models/Card');
         const Contact = require('../models/Contact');
+        const Client = require('../models/Client');
         
         // Get all counts in parallel for better performance
         // Exclude current admin from admin count (shows "other admins")
-        const [userCount, adminCount, cardsCount, contactStats] = await Promise.all([
+        const [userCount, adminCount, cardsCount, contactStats, clientCount] = await Promise.all([
             User.countDocuments(),
             Admin.countDocuments({ _id: { $ne: req.user._id } }), 
             Card.countDocuments(),
@@ -197,7 +198,8 @@ const getDashboardStats = async (req, res) => {
                         count: { $sum: 1 }
                     }
                 }
-            ])
+            ]),
+            Client.countDocuments({ status: 'active' })
         ]);
 
         // Process contact stats to get new contacts count
@@ -211,6 +213,7 @@ const getDashboardStats = async (req, res) => {
             adminCount,
             cardsCount,
             contactCount: contactsByStatus.new || 0,
+            clientCount,
             lastUpdated: new Date().toISOString()
         };
 

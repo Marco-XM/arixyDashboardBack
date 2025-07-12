@@ -15,11 +15,41 @@ const {
 } = require('../controllers/cardController');
 
 const router = express.Router();
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    console.log('File filter check:', {
+      fieldname: file.fieldname,
+      originalname: file.originalname,
+      mimetype: file.mimetype
+    });
+    
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
+
+// Error handling middleware for multer
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error('Multer Error:', err);
+    return res.status(400).json({ message: `Upload error: ${err.message}` });
+  } else if (err) {
+    console.error('Upload Error:', err);
+    return res.status(400).json({ message: `Upload error: ${err.message}` });
+  }
+  next();
+};
 
 // @route   POST /api/cards
 // @desc    Create a new card
-router.post('/cards', auth,upload.single('image'), createCard);
+router.post('/cards', auth, upload.single('image'), handleMulterError, createCard);
 
 // @route   GET /api/cards
 // @desc    Get all cards (public access for website)
