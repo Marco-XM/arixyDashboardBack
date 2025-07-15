@@ -1,4 +1,5 @@
 const Card = require('../models/Card');
+const { getOptimizedImageUrl, getResponsiveImageUrls } = require('./cloudinary');
 
 // Helper to generate a unique card code
 const generateCardCode = () => `ARX-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -34,6 +35,13 @@ const createCard = async (req, res) => {
     });
 
     await newCard.save();
+    
+    // Generate optimized image URLs if image exists
+    if (newCard.image) {
+      const publicId = newCard.image.split('/').pop().split('.')[0]; // Extract public_id from URL
+      newCard.optimizedImages = getResponsiveImageUrls(publicId);
+    }
+    
     console.log('✅ Card created successfully:', newCard._id);
     res.status(201).json(newCard);
   } catch (err) {
@@ -46,7 +54,26 @@ const createCard = async (req, res) => {
 const getAllCards = async (req, res) => {
   try {
     const cards = await Card.find();
-    res.json(cards);
+    
+    // Add optimized image URLs to each card
+    const cardsWithOptimizedImages = cards.map(card => {
+      const cardObj = card.toObject();
+      if (cardObj.image) {
+        try {
+          // Extract public_id from Cloudinary URL
+          const urlParts = cardObj.image.split('/');
+          const publicIdWithExtension = urlParts[urlParts.length - 1];
+          const publicId = publicIdWithExtension.split('.')[0];
+          
+          cardObj.optimizedImages = getResponsiveImageUrls(publicId);
+        } catch (error) {
+          console.warn('Could not generate optimized URLs for card:', cardObj._id, error.message);
+        }
+      }
+      return cardObj;
+    });
+    
+    res.json(cardsWithOptimizedImages);
   } catch (err) {
     console.error('Error fetching cards:', err);
     res.status(500).json({ message: 'Error fetching cards' });
@@ -71,7 +98,15 @@ const getCardById = async (req, res) => {
     if (!card) {
       return res.status(404).json({ message: 'Card not found' });
     }
-    res.json(card);
+    
+    // Add optimized image URLs if image exists
+    const cardWithOptimizedImages = card.toObject();
+    if (cardWithOptimizedImages.image) {
+      cardWithOptimizedImages.optimizedImage = getOptimizedImageUrl(cardWithOptimizedImages.image);
+      cardWithOptimizedImages.responsiveImages = getResponsiveImageUrls(cardWithOptimizedImages.image);
+    }
+    
+    res.json(cardWithOptimizedImages);
   } catch (err) {
     console.error('Error fetching card:', err);
     res.status(500).json({ message: 'Error fetching card' });
