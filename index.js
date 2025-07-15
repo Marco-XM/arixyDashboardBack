@@ -14,7 +14,7 @@ const port = 5000;
 app.use(express.json());
 
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:5174', 'https://arixy-dashboard.vercel.app', 'https://arixy.tech', 'http://localhost:3000', 'https://arixy.vercel.app'],
+    origin: ['http://localhost:5173', 'http://localhost:5174', 'https://arixy-dashboard.vercel.app', 'https://www.arixy.tech', 'http://localhost:3000', 'https://arixy.vercel.app'],
     credentials: true
 }));
 
