@@ -82,6 +82,22 @@ const clientStorage = new CloudinaryStorage({
   },
 });
 
+// Storage for images embedded into marketing emails (logos, banners, etc.)
+const emailStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'email_assets',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    flags: 'preserve_transparency',
+    public_id: (req, file) => {
+      console.log('Email asset upload - generating public_id for:', file.originalname);
+      return 'email_' + Date.now();
+    },
+  },
+});
+
 // Utility functions for optimized image URLs
 const getOptimizedImageUrl = (publicId, options = {}) => {
   const {
@@ -164,11 +180,12 @@ const getResponsiveImageUrls = (publicId) => {
   };
 };
 
-module.exports = { 
-  cloudinary, 
-  storage, 
-  clientStorage, 
-  getOptimizedImageUrl, 
+module.exports = {
+  cloudinary,
+  storage,
+  clientStorage,
+  emailStorage,
+  getOptimizedImageUrl,
   getResponsiveImageUrls,
-  imageTransformations 
+  imageTransformations
 };

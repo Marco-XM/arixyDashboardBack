@@ -1,9 +1,40 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const nodemailer = require('nodemailer');
 const EmailTemplate = require('../models/EmailTemplate');
 const EmailConfig = require('../models/EmailConfig');
 const auth = require('../middleware/auth');
+const { emailStorage } = require('../controllers/cloudinary');
+
+// Upload handler for images embedded into emails (logo, header, inline images).
+const upload = multer({
+  storage: emailStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  },
+});
+
+// Upload an image and get back a hosted URL to drop into the email HTML.
+// The frontend editor calls this when the user inserts a logo/image, then
+// embeds <img src="<url>"> into the message body.
+router.post('/upload-image', auth, (req, res) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
+    // multer-storage-cloudinary puts the secure URL on req.file.path.
+    res.json({ url: req.file.path, publicId: req.file.filename });
+  });
+});
 
 // Configure nodemailer transporter with user's email config
 const createTransporter = async (userId, configId = null) => {
@@ -78,6 +109,7 @@ router.post('/send-email', auth, async (req, res) => {
       return content
         .replace(/\$email/g, email)
         .replace(/\$userName/g, email.split('@')[0]) // Extract username from email
+        .replace(/\$senderName/g, emailConfig.senderName || 'Your Company')
         .replace(/\$companyName/g, emailConfig.senderName || 'Your Company')
         .replace(/\$date/g, new Date().toLocaleDateString());
     };
