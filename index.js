@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const connectDB = require('./db');
 const userRoutes = require('./routes/userRoutes');
 const cardRoutes = require('./routes/cardRoutes');
 const marketingRoutes = require('./routes/marketingRoutes');
@@ -18,9 +18,19 @@ app.use(cors({
     credentials: true
 }));
 
-mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("MongoDB connected!"))
-.catch(err => console.error("MongoDB connection error:", err));
+// Ensure a live DB connection before any route/query runs. On serverless this
+// prevents queries from being buffered against a cold/stale connection (which
+// surfaced as "Operation ...findOne() buffering timed out after 10000ms" and
+// cascaded into spurious 401s / logouts).
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (err) {
+        console.error("MongoDB connection error:", err);
+        res.status(503).json({ error: 'Database temporarily unavailable, please try again.' });
+    }
+});
 
 app.use('/api', userRoutes);
 app.use('/api', cardRoutes);
