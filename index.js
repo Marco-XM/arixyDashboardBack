@@ -11,7 +11,11 @@ const clientRoutes = require('./routes/clientRoutes');
 const app = express();
 const port = 5000;
 
-app.use(express.json());
+// Raised body limits so large email HTML (pasted/base64 inline images) and
+// attachment-bearing template/send payloads aren't rejected with a 413 before
+// reaching the route (the default 100kb limit silently broke "Save as Template").
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
 app.use(cors({
     origin: ['http://localhost:5173', 'http://localhost:5174', 'https://arixy-dashboard.vercel.app', 'https://www.arixytech.com', 'https://arixytech.com', 'https://www.arixy.tech', 'http://localhost:3000', 'https://arixy.vercel.app'],

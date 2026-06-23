@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 const EmailTemplate = require('../models/EmailTemplate');
 const EmailConfig = require('../models/EmailConfig');
 const auth = require('../middleware/auth');
-const { emailStorage } = require('../controllers/cloudinary');
+const { emailStorage, attachmentStorage } = require('../controllers/cloudinary');
 
 // Upload handler for images embedded into emails (logo, header, inline images).
 const upload = multer({
@@ -18,6 +18,13 @@ const upload = multer({
       cb(new Error('Only image files are allowed!'), false);
     }
   },
+});
+
+// Upload handler for real email attachments (any file type, no size cap — the
+// user asked to attach files/videos regardless of size). These are sent as
+// genuine email attachments and saved with the template for reuse.
+const uploadAttachment = multer({
+  storage: attachmentStorage,
 });
 
 // Upload an image and get back a hosted URL to drop into the email HTML.
@@ -33,6 +40,32 @@ router.post('/upload-image', auth, (req, res) => {
     }
     // multer-storage-cloudinary puts the secure URL on req.file.path.
     res.json({ url: req.file.path, publicId: req.file.filename });
+  });
+});
+
+// Upload a real email attachment (file/video/document of any type). The frontend
+// stores the returned metadata on the template and includes it when sending so
+// nodemailer attaches the hosted file as a genuine attachment.
+router.post('/upload-attachment', auth, (req, res) => {
+  uploadAttachment.single('file')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file provided' });
+    }
+    res.json({
+      url: req.file.path,
+      publicId: req.file.filename,
+      filename: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      resourceType: req.file.mimetype.startsWith('image/')
+        ? 'image'
+        : req.file.mimetype.startsWith('video/')
+          ? 'video'
+          : 'raw',
+    });
   });
 });
 
@@ -85,7 +118,7 @@ const createTransporter = async (userId, configId = null) => {
 // Send email
 router.post('/send-email', auth, async (req, res) => {
   try {
-    const { emails, subject, message, isHtml, configId } = req.body;
+    const { emails, subject, message, isHtml, configId, attachments } = req.body;
 
     if (!emails || !Array.isArray(emails) || emails.length === 0) {
       return res.status(400).json({ error: 'Emails array is required' });
@@ -125,7 +158,14 @@ router.post('/send-email', auth, async (req, res) => {
         },
         to: email,
         subject: processMessage(subject, email),
-        [isHtml ? 'html' : 'text']: processedMessage
+        [isHtml ? 'html' : 'text']: processedMessage,
+        // Real attachments: nodemailer streams each hosted Cloudinary URL and
+        // attaches it to the message (sent regardless of size).
+        attachments: Array.isArray(attachments)
+          ? attachments
+              .filter((a) => a && a.url)
+              .map((a) => ({ filename: a.filename || 'attachment', path: a.url }))
+          : []
       };
 
       return transporter.sendMail(mailOptions);
@@ -147,14 +187,22 @@ router.post('/send-email', auth, async (req, res) => {
   }
 });
 
-// Get all templates
+// Get all templates: the user's own templates plus every public (shared) one.
 router.get('/templates', auth, async (req, res) => {
   try {
-    const templates = await EmailTemplate.find({ createdBy: req.user.id })
+    const templates = await EmailTemplate.find({
+      $or: [{ createdBy: req.user.id }, { isPublic: true }]
+    })
       .sort({ createdAt: -1 })
-      .select('name subject content isHtml createdAt updatedAt');
-    
-    res.json(templates);
+      .select('name subject content isHtml attachments isPublic createdBy createdByName createdAt updatedAt');
+
+    // Flag ownership so the UI only shows edit/delete/toggle on the user's own.
+    const result = templates.map((t) => ({
+      ...t.toObject(),
+      isOwner: String(t.createdBy) === String(req.user.id)
+    }));
+
+    res.json(result);
   } catch (error) {
     console.error('Error fetching templates:', error);
     res.status(500).json({ error: 'Failed to fetch templates' });
@@ -183,7 +231,7 @@ router.get('/templates/:id', auth, async (req, res) => {
 // Create new template
 router.post('/templates', auth, async (req, res) => {
   try {
-    const { name, subject, content, isHtml } = req.body;
+    const { name, subject, content, isHtml, isPublic, attachments } = req.body;
 
     if (!name || !subject || !content) {
       return res.status(400).json({ error: 'Name, subject, and content are required' });
@@ -204,7 +252,10 @@ router.post('/templates', auth, async (req, res) => {
       subject,
       content,
       isHtml: isHtml || false,
-      createdBy: req.user.id
+      isPublic: !!isPublic,
+      attachments: Array.isArray(attachments) ? attachments : [],
+      createdBy: req.user.id,
+      createdByName: req.user.name || req.user.username || ''
     });
 
     await template.save();
@@ -216,6 +267,8 @@ router.post('/templates', auth, async (req, res) => {
         name: template.name,
         subject: template.subject,
         isHtml: template.isHtml,
+        isPublic: template.isPublic,
+        attachments: template.attachments,
         createdAt: template.createdAt
       }
     });
@@ -229,7 +282,7 @@ router.post('/templates', auth, async (req, res) => {
 // Update template
 router.put('/templates/:id', auth, async (req, res) => {
   try {
-    const { name, subject, content, isHtml } = req.body;
+    const { name, subject, content, isHtml, isPublic, attachments } = req.body;
 
     const template = await EmailTemplate.findOne({
       _id: req.params.id,
@@ -258,6 +311,8 @@ router.put('/templates/:id', auth, async (req, res) => {
     if (subject) template.subject = subject;
     if (content) template.content = content;
     if (typeof isHtml !== 'undefined') template.isHtml = isHtml;
+    if (typeof isPublic !== 'undefined') template.isPublic = !!isPublic;
+    if (Array.isArray(attachments)) template.attachments = attachments;
 
     await template.save();
 
@@ -268,6 +323,8 @@ router.put('/templates/:id', auth, async (req, res) => {
         name: template.name,
         subject: template.subject,
         isHtml: template.isHtml,
+        isPublic: template.isPublic,
+        attachments: template.attachments,
         updatedAt: template.updatedAt
       }
     });

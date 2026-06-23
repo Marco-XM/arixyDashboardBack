@@ -33,7 +33,7 @@ const loginAdmin = async (req, res) => {
         }
         
         console.log('🔑 Generating token...');
-        const token = jwt.sign({ _id: admin._id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        const token = jwt.sign({ _id: admin._id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '72h' });
         
         console.log('✅ Login successful');
         res.send({ admin, token });
@@ -54,7 +54,7 @@ const loginUser = async (req, res) => {
         if (!isMatch) {
             return res.status(400).send({ error: 'Invalid login credentials' });
         }
-        const token = jwt.sign({ _id: user._id, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        const token = jwt.sign({ _id: user._id, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '72h' });
         res.send({ user, token });
     } catch (error) {
         res.status(400).send(error);

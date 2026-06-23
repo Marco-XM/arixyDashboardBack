@@ -98,6 +98,26 @@ const emailStorage = new CloudinaryStorage({
   },
 });
 
+// Storage for real email attachments (files, videos, documents of any type).
+// Routes each upload to the correct Cloudinary resource_type so non-image files
+// (pdf, docx, zip, etc.) and videos are stored and served correctly.
+const attachmentStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'email_attachments',
+    resource_type: (req, file) =>
+      file.mimetype.startsWith('image/')
+        ? 'image'
+        : file.mimetype.startsWith('video/')
+          ? 'video'
+          : 'raw',
+    public_id: (req, file) =>
+      `attach_${Date.now()}_${file.originalname
+        .replace(/\.[^.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+  },
+});
+
 // Utility functions for optimized image URLs
 const getOptimizedImageUrl = (publicId, options = {}) => {
   const {
@@ -185,6 +205,7 @@ module.exports = {
   storage,
   clientStorage,
   emailStorage,
+  attachmentStorage,
   getOptimizedImageUrl,
   getResponsiveImageUrls,
   imageTransformations
