@@ -172,9 +172,75 @@ const getUserName = async (req, res) => {
             return res.status(404).send({ error: 'User not found' });
         }
 
-        res.send({ username: user.username });
+        res.send({
+            username: user.username,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            profilePicture: user.profilePicture || null,
+        });
     } catch (error) {
         res.status(500).send(error);
+    }
+};
+
+// GET /api/me — return the authenticated user's profile (no password)
+const getMe = async (req, res) => {
+    try {
+        const u = req.user.toObject();
+        delete u.password;
+        res.send(u);
+    } catch (error) {
+        res.status(500).send({ error: 'Failed to load profile' });
+    }
+};
+
+// PATCH /api/me — update name/email and optionally change password
+const updateMe = async (req, res) => {
+    try {
+        const { name, email, currentPassword, newPassword } = req.body;
+        const user = req.user; // Mongoose doc (Admin or User) from auth middleware
+
+        if (name !== undefined) user.name = name;
+        if (email !== undefined) user.email = email;
+
+        if (newPassword) {
+            if (!currentPassword) {
+                return res.status(400).send({ error: 'Current password is required to set a new password' });
+            }
+            const isMatch = await bcrypt.compare(currentPassword, user.password);
+            if (!isMatch) {
+                return res.status(400).send({ error: 'Current password is incorrect' });
+            }
+            user.password = newPassword; // pre('save') hook re-hashes it
+        }
+
+        await user.save();
+        const u = user.toObject();
+        delete u.password;
+        res.send(u);
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        res.status(400).send({ error: error.message || 'Failed to update profile' });
+    }
+};
+
+// PATCH /api/me/avatar — upload/replace the profile picture (multer single 'avatar')
+const updateAvatar = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).send({ error: 'No image uploaded' });
+        }
+        const user = req.user;
+        user.profilePicture = {
+            url: req.file.path,
+            publicId: req.file.filename,
+        };
+        await user.save();
+        res.send({ profilePicture: user.profilePicture });
+    } catch (error) {
+        console.error('Error updating avatar:', error);
+        res.status(400).send({ error: error.message || 'Failed to update avatar' });
     }
 };
 
@@ -184,12 +250,13 @@ const getDashboardStats = async (req, res) => {
         const Card = require('../models/Card');
         const Contact = require('../models/Contact');
         const Client = require('../models/Client');
-        
+        const Blog = require('../models/Blog');
+
         // Get all counts in parallel for better performance
         // Exclude current admin from admin count (shows "other admins")
-        const [userCount, adminCount, cardsCount, contactStats, clientCount] = await Promise.all([
+        const [userCount, adminCount, cardsCount, contactStats, clientCount, blogsCount] = await Promise.all([
             User.countDocuments(),
-            Admin.countDocuments({ _id: { $ne: req.user._id } }), 
+            Admin.countDocuments({ _id: { $ne: req.user._id } }),
             Card.countDocuments(),
             Contact.aggregate([
                 {
@@ -199,7 +266,8 @@ const getDashboardStats = async (req, res) => {
                     }
                 }
             ]),
-            Client.countDocuments({ status: 'active' })
+            Client.countDocuments({ status: 'active' }),
+            Blog.countDocuments()
         ]);
 
         // Process contact stats to get new contacts count
@@ -214,6 +282,7 @@ const getDashboardStats = async (req, res) => {
             cardsCount,
             contactCount: contactsByStatus.new || 0,
             clientCount,
+            blogsCount,
             lastUpdated: new Date().toISOString()
         };
 
@@ -236,5 +305,8 @@ module.exports = {
     validateUserId,
     getUserName,
     getAdminCount,
-    getDashboardStats
+    getDashboardStats,
+    getMe,
+    updateMe,
+    updateAvatar
 };

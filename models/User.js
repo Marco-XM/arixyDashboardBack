@@ -28,6 +28,10 @@ const userSchema = new mongoose.Schema({
     role: {
         type: String,
         default: 'user'
+    },
+    profilePicture: {
+        url: String,
+        publicId: String
     }
 });
 

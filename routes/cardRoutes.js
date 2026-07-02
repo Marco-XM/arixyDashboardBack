@@ -7,6 +7,8 @@ const {
   getAllCards,
   getCardsCount,
   getCardById,
+  getCardBySlug,
+  backfillSlugs,
   updateCard,
   deleteCard,
   addCardDetails,
@@ -47,9 +49,15 @@ const handleMulterError = (err, req, res, next) => {
   next();
 };
 
+// Accept a single main image plus an optional gallery for rich project pages.
+const cardImageUpload = upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'gallery', maxCount: 12 },
+]);
+
 // @route   POST /api/cards
 // @desc    Create a new card
-router.post('/cards', auth, upload.single('image'), handleMulterError, createCard);
+router.post('/cards', auth, cardImageUpload, handleMulterError, createCard);
 
 // @route   GET /api/cards
 // @desc    Get all cards (public access for website)
@@ -59,13 +67,21 @@ router.get('/cards', getAllCards);
 // @desc    Get cards count (public access for website)
 router.get('/cards/count', getCardsCount);
 
+// @route   POST /api/cards/backfill-slugs
+// @desc    Generate slugs for legacy cards missing one (admin maintenance)
+router.post('/cards/backfill-slugs', auth, backfillSlugs);
+
+// @route   GET /api/cards/slug/:slug
+// @desc    Get a single card by slug (public access for website project page)
+router.get('/cards/slug/:slug', getCardBySlug);
+
 // @route   GET /api/cards/:id
 // @desc    Get a single card by ID (public access for website)
 router.get('/cards/:id', getCardById);
 
 // @route   PUT /api/cards/:id
 // @desc    Update card details
-router.put('/cards/:id', auth, upload.single('image'), updateCard);
+router.put('/cards/:id', auth, cardImageUpload, updateCard);
 
 // @route   DELETE /api/cards/:id
 // @desc    Delete a card by ID

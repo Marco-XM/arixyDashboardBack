@@ -118,6 +118,110 @@ const attachmentStorage = new CloudinaryStorage({
   },
 });
 
+// Storage for project gallery images (rich project detail pages)
+const projectGalleryStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'cms_projects',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    flags: 'preserve_transparency',
+    public_id: (req, file) => 'project_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    transformation: [{ quality: 'auto:best', fetch_format: 'auto', flags: 'progressive' }],
+  },
+});
+
+// Storage for blog cover images
+const blogStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'blog_covers',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    flags: 'preserve_transparency',
+    public_id: (req, file) => 'blog_' + Date.now(),
+    transformation: [{ quality: 'auto:best', fetch_format: 'auto', flags: 'progressive' }],
+  },
+});
+
+// Storage for client company logos (real companies Arixy works with)
+const companyStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'company_logos',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'svg', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    flags: 'preserve_transparency',
+    public_id: (req, file) => 'company_' + Date.now(),
+    transformation: [{ quality: 'auto:best', fetch_format: 'auto', flags: 'progressive' }],
+  },
+});
+
+// Storage for support-ticket screenshots/attachments. Routes each upload to the
+// correct Cloudinary resource_type so non-image files are stored/served correctly.
+const ticketStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'ticket_attachments',
+    resource_type: (req, file) =>
+      file.mimetype.startsWith('image/')
+        ? 'image'
+        : file.mimetype.startsWith('video/')
+          ? 'video'
+          : 'raw',
+    public_id: (req, file) =>
+      `ticket_${Date.now()}_${(file.originalname || 'file')
+        .replace(/\.[^.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+  },
+});
+
+// Storage for signature images (used in PDF templates). Preserve transparency.
+const signatureStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'signatures',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    flags: 'preserve_transparency',
+    public_id: (req, file) => 'sig_' + Date.now(),
+  },
+});
+
+// Storage for user/admin profile pictures (square avatars)
+const avatarStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'profile_pictures',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    public_id: (req, file) => 'avatar_' + (req.user?._id || Date.now()),
+    transformation: [
+      { width: 400, height: 400, crop: 'fill', gravity: 'face', quality: 'auto:best', fetch_format: 'auto' },
+    ],
+  },
+});
+
+// Upload an in-memory Buffer (e.g. a generated PDF) to Cloudinary as a raw asset.
+// Returns { url, publicId }.
+const streamifier = require('streamifier');
+const uploadRawBuffer = (buffer, { folder = 'documents', publicId } = {}) =>
+  new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      { folder, resource_type: 'raw', public_id: publicId, format: 'pdf' },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve({ url: result.secure_url, publicId: result.public_id });
+      }
+    );
+    streamifier.createReadStream(buffer).pipe(uploadStream);
+  });
+
 // Utility functions for optimized image URLs
 const getOptimizedImageUrl = (publicId, options = {}) => {
   const {
@@ -206,6 +310,13 @@ module.exports = {
   clientStorage,
   emailStorage,
   attachmentStorage,
+  projectGalleryStorage,
+  blogStorage,
+  companyStorage,
+  ticketStorage,
+  signatureStorage,
+  avatarStorage,
+  uploadRawBuffer,
   getOptimizedImageUrl,
   getResponsiveImageUrls,
   imageTransformations
