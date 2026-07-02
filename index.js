@@ -30,6 +30,7 @@ const allowedOrigins = [
     'https://arixy-dashboard.vercel.app',
     'https://www.arixytech.com',
     'https://arixytech.com',
+    'https://admin.arixytech.com',
     'https://www.arixy.tech',
     'https://arixy.vercel.app',
 ];
