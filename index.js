@@ -17,6 +17,7 @@ const financeRoutes = require('./routes/financeRoutes');
 const ticketRoutes = require('./routes/ticketRoutes');
 const signatureRoutes = require('./routes/signatureRoutes');
 const sitemapRoutes = require('./routes/sitemapRoutes');
+const siteRoutes = require('./routes/siteRoutes');
 
 const app = express();
 const port = 5000;
@@ -77,6 +78,7 @@ app.use('/', sitemapRoutes);
 app.use('/api', userRoutes);
 app.use('/api', cardRoutes);
 app.use('/api', blogRoutes);
+app.use('/api', siteRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api', contactRoutes);
 app.use('/api/clients', clientRoutes);

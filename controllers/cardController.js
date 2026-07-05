@@ -51,7 +51,7 @@ const createCard = async (req, res) => {
 
     const {
       title, title_ar, description, description_ar, summary, summary_ar,
-      code, client, year, liveUrl, featured, slug,
+      body, body_ar, code, client, year, liveUrl, featured, slug,
     } = req.body;
     const image = mainImagePath(req);
 
@@ -75,6 +75,8 @@ const createCard = async (req, res) => {
       description_ar,
       summary,
       summary_ar,
+      body,
+      body_ar,
       image,
       client,
       year,
@@ -177,7 +179,7 @@ const updateCard = async (req, res) => {
       if (body[field] !== undefined) card[field] = body[field];
     };
     ['title', 'title_ar', 'description', 'description_ar', 'summary', 'summary_ar',
-      'client', 'year', 'liveUrl'].forEach(assignIfPresent);
+      'body', 'body_ar', 'client', 'year', 'liveUrl'].forEach(assignIfPresent);
 
     if (body.featured !== undefined) card.featured = body.featured === 'true' || body.featured === true;
     const services = parseArrayField(body.services);

@@ -146,6 +146,32 @@ const blogStorage = new CloudinaryStorage({
   },
 });
 
+// Storage for images embedded into blog/project HTML bodies via the dashboard
+// editor. Uploaded before the post/project is saved so the editor can hand the
+// author a public URL to reference in the HTML.
+const contentStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'content_images',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+    quality: 'auto:best',
+    format: 'auto',
+    flags: 'preserve_transparency',
+    public_id: (req, file) => 'content_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    transformation: [{ quality: 'auto:best', fetch_format: 'auto', flags: 'progressive' }],
+  },
+});
+
+// Storage for the public website hero background (image OR video).
+const heroStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'hero_media',
+    resource_type: (req, file) => (file.mimetype.startsWith('video/') ? 'video' : 'image'),
+    public_id: (req, file) => 'hero_' + Date.now(),
+  },
+});
+
 // Storage for client company logos (real companies Arixy works with)
 const companyStorage = new CloudinaryStorage({
   cloudinary,
@@ -312,6 +338,8 @@ module.exports = {
   attachmentStorage,
   projectGalleryStorage,
   blogStorage,
+  contentStorage,
+  heroStorage,
   companyStorage,
   ticketStorage,
   signatureStorage,

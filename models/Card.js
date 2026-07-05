@@ -18,6 +18,9 @@ const cardSchema = new mongoose.Schema({
   // Short tagline shown on the project hero/summary
   summary: String,
   summary_ar: String,
+  // Rich HTML body rendered on the project detail page (authored in the dashboard)
+  body: String,
+  body_ar: String,
   image: String,
   // Rich project detail fields
   gallery: [String],            // additional Cloudinary image URLs
