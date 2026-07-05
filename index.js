@@ -1,6 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const connectDB = require('./db');
 const userRoutes = require('./routes/userRoutes');
 const cardRoutes = require('./routes/cardRoutes');
@@ -22,12 +21,6 @@ const siteRoutes = require('./routes/siteRoutes');
 const app = express();
 const port = 5000;
 
-// Raised body limits so large email HTML (pasted/base64 inline images) and
-// attachment-bearing template/send payloads aren't rejected with a 413 before
-// reaching the route (the default 100kb limit silently broke "Save as Template").
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ limit: '25mb', extended: true }));
-
 const allowedOrigins = [
     'https://arixy-dashboard.vercel.app',
     'https://www.arixytech.com',
@@ -36,24 +29,40 @@ const allowedOrigins = [
     'https://www.arixy.tech',
     'https://arixy.vercel.app',
 ];
-app.use(cors({
-    // Allow the production whitelist plus any localhost/127.0.0.1 port (dev) and
-    // non-browser requests (no Origin header). Keeps prod origins explicit.
-    origin: (origin, cb) => {
-        if (!origin
-            || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-            || allowedOrigins.includes(origin)) {
-            return cb(null, true);
-        }
-        return cb(null, false);
-    },
-    credentials: true
-}));
 
-// Public GET endpoints are cacheable by default, but the CORS header must vary
-// by Origin or a cached response from one site can be reused by another.
-app.use('/api', (req, res, next) => {
+// Production whitelist plus any localhost/127.0.0.1 port (dev). Non-browser
+// requests (no Origin header) need no CORS headers at all.
+const isAllowedOrigin = (origin) =>
+    !!origin && (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+        || allowedOrigins.includes(origin));
+
+// CORS headers are set as the VERY FIRST middleware so that every response —
+// including body-parser 413s, DB 503s and unhandled 500s below — carries them.
+// A response without these headers is reported by browsers as a misleading
+// "blocked by CORS policy" even when the real failure is a server error.
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (isAllowedOrigin(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers',
+            req.headers['access-control-request-headers'] || 'Authorization,Content-Type');
+    }
+    // The CORS header varies by Origin, so caches must never reuse a response
+    // from one site for another.
     res.setHeader('Vary', 'Origin');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    next();
+});
+
+// Raised body limits so large email HTML (pasted/base64 inline images) and
+// attachment-bearing template/send payloads aren't rejected with a 413 before
+// reaching the route (the default 100kb limit silently broke "Save as Template").
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ limit: '25mb', extended: true }));
+
+app.use('/api', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     next();
 });
@@ -90,6 +99,15 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/signatures', signatureRoutes);
+
+// Last-resort error handler: return JSON instead of letting Express/the
+// platform emit a header-less error page (CORS headers were already set by
+// the first middleware, so the browser reports the real status code).
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    if (res.headersSent) return next(err);
+    res.status(err.status || 500).json({ message: err.message || 'Internal server error' });
+});
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
