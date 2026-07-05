@@ -16,6 +16,7 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const financeRoutes = require('./routes/financeRoutes');
 const ticketRoutes = require('./routes/ticketRoutes');
 const signatureRoutes = require('./routes/signatureRoutes');
+const sitemapRoutes = require('./routes/sitemapRoutes');
 
 const app = express();
 const port = 5000;
@@ -48,6 +49,14 @@ app.use(cors({
     credentials: true
 }));
 
+// Public GET endpoints are cacheable by default, but the CORS header must vary
+// by Origin or a cached response from one site can be reused by another.
+app.use('/api', (req, res, next) => {
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+});
+
 // Ensure a live DB connection before any route/query runs. On serverless this
 // prevents queries from being buffered against a cold/stale connection (which
 // surfaced as "Operation ...findOne() buffering timed out after 10000ms" and
@@ -61,6 +70,9 @@ app.use(async (req, res, next) => {
         res.status(503).json({ error: 'Database temporarily unavailable, please try again.' });
     }
 });
+
+// Live sitemap for the public website (proxied from arixy.tech/sitemap.xml).
+app.use('/', sitemapRoutes);
 
 app.use('/api', userRoutes);
 app.use('/api', cardRoutes);
