@@ -71,7 +71,7 @@ const getInvoiceById = async (req, res) => {
 
 const createInvoice = async (req, res) => {
     try {
-        const { number, company, subscription, document, type, lineItems, tax, currency, status, issueDate, dueDate, period, notes } = req.body;
+        const { number, company, subscription, document, type, lineItems, tax, currency, status, issueDate, dueDate, period, notes, visibleToClient } = req.body;
         if (!company) return res.status(400).json({ success: false, message: 'Company is required' });
 
         const invoice = new Invoice({
@@ -82,6 +82,7 @@ const createInvoice = async (req, res) => {
             status: status || 'draft',
             issueDate: issueDate || Date.now(), dueDate: dueDate || undefined,
             period: period || undefined, notes: notes || '',
+            visibleToClient: visibleToClient !== false,
             createdBy: req.user?._id,
         });
         await invoice.save();
@@ -95,7 +96,7 @@ const createInvoice = async (req, res) => {
 // Build a recurring maintenance invoice from a subscription + period.
 const createFromSubscription = async (req, res) => {
     try {
-        const { subscriptionId, month, year, dueDate } = req.body;
+        const { subscriptionId, month, year, dueDate, visibleToClient } = req.body;
         const sub = await Subscription.findById(subscriptionId).populate('service', 'name');
         if (!sub) return res.status(404).json({ success: false, message: 'Subscription not found' });
 
@@ -110,6 +111,7 @@ const createFromSubscription = async (req, res) => {
             status: 'draft',
             period: month ? { month: Number(month), year: Number(year) } : undefined,
             dueDate: dueDate || undefined,
+            visibleToClient: visibleToClient !== false,
             createdBy: req.user?._id,
         });
         await invoice.save();
@@ -124,13 +126,32 @@ const updateInvoice = async (req, res) => {
     try {
         const invoice = await Invoice.findById(req.params.id);
         if (!invoice) return res.status(404).json({ success: false, message: 'Invoice not found' });
-        const fields = ['number', 'company', 'subscription', 'document', 'type', 'lineItems', 'tax', 'currency', 'status', 'issueDate', 'dueDate', 'period', 'notes'];
+        const fields = ['number', 'company', 'subscription', 'document', 'type', 'lineItems', 'tax', 'currency', 'status', 'issueDate', 'dueDate', 'period', 'notes', 'visibleToClient'];
         fields.forEach((f) => { if (req.body[f] !== undefined) invoice[f] = req.body[f]; });
         await invoice.save();
         res.json({ success: true, message: 'Invoice updated', data: invoice });
     } catch (error) {
         console.error('Error updating invoice:', error);
         res.status(500).json({ success: false, message: 'Error updating invoice', error: error.message });
+    }
+};
+
+// Show or hide an invoice in the client portal. Only touches the flag, so the
+// totals recomputed on save are left alone.
+const setInvoiceVisibility = async (req, res) => {
+    try {
+        if (typeof req.body.visibleToClient !== 'boolean') {
+            return res.status(400).json({ success: false, message: 'visibleToClient must be true or false' });
+        }
+        const invoice = await Invoice.findByIdAndUpdate(
+            req.params.id,
+            { $set: { visibleToClient: req.body.visibleToClient } },
+            { new: true },
+        );
+        if (!invoice) return res.status(404).json({ success: false, message: 'Invoice not found' });
+        res.json({ success: true, message: invoice.visibleToClient ? 'Invoice shown to client' : 'Invoice hidden from client', data: invoice });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Error updating invoice visibility', error: error.message });
     }
 };
 
@@ -206,5 +227,5 @@ const getSummary = async (req, res) => {
 
 module.exports = {
     getAllInvoices, getInvoiceById, createInvoice, createFromSubscription,
-    updateInvoice, deleteInvoice, recordPayment, getSummary,
+    updateInvoice, setInvoiceVisibility, deleteInvoice, recordPayment, getSummary,
 };

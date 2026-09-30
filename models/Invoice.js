@@ -34,6 +34,8 @@ const invoiceSchema = new mongoose.Schema({
     },
 
     notes: { type: String, trim: true, default: '' },
+    // Whether the company can see this invoice in the client portal.
+    visibleToClient: { type: Boolean, default: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: false },
 }, { timestamps: true });
 
