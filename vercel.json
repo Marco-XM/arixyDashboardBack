@@ -6,7 +6,11 @@
       "use": "@vercel/node",
       "config": {
         "maxLambdaSize": "50mb",
-        "includeFiles": ["fonts/**", "assets/**"]
+        "includeFiles": [
+          "fonts/**",
+          "assets/**",
+          "node_modules/pdfkit/js/standard-fonts/**/*.cjs"
+        ]
       }
     }
   ],
