@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const nodemailer = require('nodemailer');
 const EmailTemplate = require('../models/EmailTemplate');
 const EmailConfig = require('../models/EmailConfig');
 const auth = require('../middleware/auth');
+const { createTransporter } = require('../utils/mailer');
 const { emailStorage, attachmentStorage } = require('../controllers/cloudinary');
 
 // Upload handler for images embedded into emails (logo, header, inline images).
@@ -68,52 +68,6 @@ router.post('/upload-attachment', auth, (req, res) => {
     });
   });
 });
-
-// Configure nodemailer transporter with user's email config
-const createTransporter = async (userId, configId = null) => {
-  let emailConfig;
-  
-  if (configId) {
-    emailConfig = await EmailConfig.findOne({ _id: configId, userId });
-  } else {
-    // Get default config or first available config
-    emailConfig = await EmailConfig.findOne({ userId, isDefault: true }) || 
-                  await EmailConfig.findOne({ userId });
-  }
-  
-  if (!emailConfig) {
-    throw new Error('Email configuration not found. Please set up your email settings first.');
-  }
-
-  const transporterConfig = {
-    auth: {
-      user: emailConfig.senderEmail,
-      pass: emailConfig.senderPassword
-    }
-  };
-
-  // Configure based on email service
-  switch (emailConfig.emailService) {
-    case 'gmail':
-      transporterConfig.service = 'gmail';
-      break;
-    case 'outlook':
-      transporterConfig.service = 'hotmail';
-      break;
-    case 'yahoo':
-      transporterConfig.service = 'yahoo';
-      break;
-    case 'custom':
-      transporterConfig.host = emailConfig.customHost;
-      transporterConfig.port = emailConfig.customPort;
-      transporterConfig.secure = emailConfig.customPort === 465;
-      break;
-    default:
-      transporterConfig.service = 'gmail';
-  }
-
-  return nodemailer.createTransport(transporterConfig);
-};
 
 // Send email
 router.post('/send-email', auth, async (req, res) => {

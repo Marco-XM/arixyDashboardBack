@@ -17,6 +17,7 @@ const ticketRoutes = require('./routes/ticketRoutes');
 const signatureRoutes = require('./routes/signatureRoutes');
 const sitemapRoutes = require('./routes/sitemapRoutes');
 const siteRoutes = require('./routes/siteRoutes');
+const serverReportRoutes = require('./routes/serverReportRoutes');
 
 const app = express();
 const port = 5000;
@@ -99,6 +100,7 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/signatures', signatureRoutes);
+app.use('/api/server-reports', serverReportRoutes);
 
 // Last-resort error handler: return JSON instead of letting Express/the
 // platform emit a header-less error page (CORS headers were already set by

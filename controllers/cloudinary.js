@@ -186,6 +186,17 @@ const companyStorage = new CloudinaryStorage({
   },
 });
 
+// Storage for the agency logo printed on client reports. Kept as uploaded
+// (PNG/SVG transparency matters); the PDF renderer requests a PNG rendition.
+const brandingStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'report_branding',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'svg', 'webp'],
+    public_id: (req, file) => 'brand_logo_' + Date.now(),
+  },
+});
+
 // Storage for support-ticket screenshots/attachments. Routes each upload to the
 // correct Cloudinary resource_type so non-image files are stored/served correctly.
 const ticketStorage = new CloudinaryStorage({
@@ -341,6 +352,7 @@ module.exports = {
   contentStorage,
   heroStorage,
   companyStorage,
+  brandingStorage,
   ticketStorage,
   signatureStorage,
   avatarStorage,
