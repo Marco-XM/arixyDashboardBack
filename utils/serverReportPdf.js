@@ -234,12 +234,15 @@ function sniffFormat(buf) {
     return null;
 }
 
-async function fetchImage(url) {
+// `transform` maps the stored URL to the rendition to download (logos by
+// default; content images ask for a larger, untrimmed one).
+async function fetchImage(url, transform = pdfFriendlyUrl) {
     if (!url || !/^https?:\/\//i.test(url)) return null;
-    if (imageCache.has(url)) return imageCache.get(url);
+    const src = transform(url);
+    if (imageCache.has(src)) return imageCache.get(src);
     let img = null;
     try {
-        const res = await axios.get(pdfFriendlyUrl(url), {
+        const res = await axios.get(src, {
             responseType: 'arraybuffer',
             timeout: 8000,
             maxContentLength: 8 * 1024 * 1024,
@@ -253,7 +256,7 @@ async function fetchImage(url) {
         return null; // don't cache failures — the next render retries
     }
     if (imageCache.size >= IMAGE_CACHE_MAX) imageCache.delete(imageCache.keys().next().value);
-    imageCache.set(url, img);
+    imageCache.set(src, img);
     return img;
 }
 
@@ -775,4 +778,13 @@ module.exports = {
     reportFilename,
     serviceSummary,
     STATUS,
+    // Shared with the client-report renderer (utils/clientReportPdf.js).
+    loadLib,
+    fetchImage,
+    normalizeHex,
+    initials,
+    isRtl,
+    safeFilePart,
+    C,
+    BRAND_STRIPE,
 };
