@@ -5,6 +5,7 @@ const Company = require('../models/Company');
 const InvoiceCounter = require('../models/InvoiceCounter');
 const ReportSettings = require('../models/ReportSettings');
 const { renderInvoicePdf, invoiceFilename } = require('../utils/invoicePdf');
+const fx = require('../utils/fx');
 const mongoose = require('mongoose');
 
 const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
@@ -350,27 +351,52 @@ const recordPayment = async (req, res) => {
 
 /* ------------------------------- Summary --------------------------------- */
 
+// GET /api/finance/summary?currency=EGP[&company=] — totals converted into
+// one currency at today's exchange rates.
 const getSummary = async (req, res) => {
     try {
         const { company } = req.query;
+        const currency = str(req.query.currency, 8).toUpperCase() || 'EGP';
         const match = company ? { company: new mongoose.Types.ObjectId(String(company)) } : {};
 
-        const [byStatus, totals, paidAgg] = await Promise.all([
-            Invoice.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$total' } } }]),
-            Invoice.aggregate([{ $match: match }, { $group: { _id: null, invoiced: { $sum: '$total' }, count: { $sum: 1 } } }]),
-            Payment.aggregate([{ $match: company ? { company: new mongoose.Types.ObjectId(String(company)) } : {} }, { $group: { _id: null, collected: { $sum: '$amount' } } }]),
+        const [byStatus, paidAgg] = await Promise.all([
+            Invoice.aggregate([{ $match: match }, { $group: { _id: { status: '$status', currency: '$currency' }, count: { $sum: 1 }, total: { $sum: '$total' } } }]),
+            Payment.aggregate([{ $match: match }, { $group: { _id: '$currency', collected: { $sum: '$amount' } } }]),
         ]);
 
-        const invoiced = totals[0]?.invoiced || 0;
-        const collected = paidAgg[0]?.collected || 0;
+        const foreign = [...byStatus.map((r) => r._id.currency), ...paidAgg.map((r) => r._id)].some((c) => c && c.toUpperCase() !== currency);
+        const latest = foreign ? await fx.getLatest().catch(() => null) : null;
+        const unconverted = new Set();
+        const conv = (amount, cur) => {
+            const c = String(cur || currency).toUpperCase();
+            const v = c === currency ? amount : fx.convert(amount, c, currency, latest?.rates);
+            if (v === null) { unconverted.add(c); return 0; }
+            return v;
+        };
+
+        const statuses = {};
+        let invoiced = 0;
+        let invoiceCount = 0;
+        byStatus.forEach((r) => {
+            const v = conv(r.total, r._id.currency);
+            invoiced += v;
+            invoiceCount += r.count;
+            const s = statuses[r._id.status] || (statuses[r._id.status] = { count: 0, total: 0 });
+            s.count += r.count;
+            s.total += v;
+        });
+        const collected = paidAgg.reduce((t, r) => t + conv(r.collected, r._id), 0);
+
         res.json({
             success: true,
             data: {
+                currency,
                 invoiced,
                 collected,
                 outstanding: Math.max(0, invoiced - collected),
-                invoiceCount: totals[0]?.count || 0,
-                byStatus: byStatus.reduce((o, s) => { o[s._id] = { count: s.count, total: s.total }; return o; }, {}),
+                invoiceCount,
+                byStatus: statuses,
+                unconverted: [...unconverted],
             },
         });
     } catch (error) {

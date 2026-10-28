@@ -4,6 +4,7 @@ const TeamMember = require('../models/TeamMember');
 const Admin = require('../models/Admin');
 const Invoice = require('../models/Invoice');
 const Payment = require('../models/Payment');
+const fx = require('../utils/fx');
 
 const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
 const num = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
@@ -205,17 +206,16 @@ function nextCharge(expense, now) {
 
 // GET /api/finance/overview?currency=EGP&months=12 — revenue vs costs per
 // month (cash basis: payments received vs expenses charged + salaries).
+// Every amount, whatever its currency, is converted into `currency` at the
+// exchange rate of the month it falls in (utils/fx.js).
 const getOverview = async (req, res) => {
     try {
-        const [invCur, payCur, expCur, teamCur] = await Promise.all([
-            Invoice.distinct('currency'), Payment.distinct('currency'), Expense.distinct('currency'), TeamMember.distinct('currency'),
-        ]);
-        const currencies = [...new Set([...invCur, ...payCur, ...expCur, ...teamCur].filter(Boolean))];
-        const currency = str(req.query.currency, 8).toUpperCase() || currencies[0] || 'EGP';
+        const currency = str(req.query.currency, 8).toUpperCase() || 'EGP';
         const months = Math.min(36, Math.max(1, num(req.query.months, 12)));
 
         const now = new Date();
         const thisMonth = monthStart(now);
+        const thisKey = monthKey(thisMonth);
         const from = addMonths(thisMonth, -(months - 1));
         const to = new Date(Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() + 1, 1) - 1);
 
@@ -226,15 +226,34 @@ const getOverview = async (req, res) => {
         }
         const byKey = Object.fromEntries(series.map((s) => [s.month, s]));
 
-        const [payments, invoices, expenses, team] = await Promise.all([
-            Payment.find({ currency, paidAt: { $gte: from, $lte: to } }).select('amount paidAt').lean(),
-            Invoice.find({ currency, status: { $nin: ['draft', 'void'] }, issueDate: { $gte: from, $lte: to } }).select('total issueDate').lean(),
-            Expense.find({ currency }).lean(),
-            TeamMember.find({ currency }).lean(),
+        const [payments, invoices, expenses, team, latest] = await Promise.all([
+            Payment.find({ paidAt: { $gte: from, $lte: to } }).select('amount currency paidAt').lean(),
+            Invoice.find({ status: { $nin: ['draft', 'void'] }, issueDate: { $gte: from, $lte: to } }).select('total currency issueDate').lean(),
+            Expense.find().lean(),
+            TeamMember.find().lean(),
+            fx.getLatest().catch((err) => { console.warn('FX unavailable:', err.message); return null; }),
         ]);
 
-        payments.forEach((p) => { const s = byKey[monthKey(new Date(p.paidAt))]; if (s) s.collected += p.amount; });
-        invoices.forEach((inv) => { const s = byKey[monthKey(new Date(inv.issueDate))]; if (s) s.invoiced += inv.total; });
+        // Month rates are only needed when some amount is in another currency.
+        const usedCurrencies = new Set([...payments, ...invoices, ...expenses, ...team].map((x) => String(x.currency || '').toUpperCase()).filter(Boolean));
+        const needsFx = [...usedCurrencies].some((c) => c !== currency);
+        const monthRates = {};
+        if (needsFx) {
+            await Promise.all(series.map(async (s) => {
+                monthRates[s.month] = s.month === thisKey ? latest : await fx.getMonth(s.month).catch(() => latest);
+            }));
+        }
+        const unconverted = new Set();
+        const conv = (amount, cur, key) => {
+            const c = String(cur || currency).toUpperCase();
+            if (c === currency) return Number(amount || 0);
+            const v = fx.convert(amount, c, currency, (monthRates[key] || latest)?.rates);
+            if (v === null) { unconverted.add(c); return 0; }
+            return v;
+        };
+
+        payments.forEach((p) => { const k = monthKey(new Date(p.paidAt)); const s = byKey[k]; if (s) s.collected += conv(p.amount, p.currency, k); });
+        invoices.forEach((inv) => { const k = monthKey(new Date(inv.issueDate)); const s = byKey[k]; if (s) s.invoiced += conv(inv.total, inv.currency, k); });
 
         const byCategory = {};
         const addCategory = (cat, amount) => { byCategory[cat] = (byCategory[cat] || 0) + amount; };
@@ -243,14 +262,16 @@ const getOverview = async (req, res) => {
                 ? chargesBetween(e, from, to)
                 : (new Date(e.date) >= from && new Date(e.date) <= to ? [new Date(e.date)] : []);
             dates.forEach((d) => {
-                const s = byKey[monthKey(d)];
+                const k = monthKey(d);
+                const s = byKey[k];
                 if (!s) return;
-                s.expenses += e.amount;
-                addCategory(e.category || 'Other', e.amount);
+                const v = conv(e.amount, e.currency, k);
+                s.expenses += v;
+                addCategory(e.category || 'Other', v);
             });
         });
         series.forEach((s) => {
-            team.forEach((m) => { s.salaries += salaryFor(m, s.start); });
+            team.forEach((m) => { s.salaries += conv(salaryFor(m, s.start), m.currency, s.month); });
             if (s.salaries) addCategory('Salaries', s.salaries);
         });
 
@@ -268,16 +289,19 @@ const getOverview = async (req, res) => {
         totals.profit = totals.collected - totals.costs;
         totals.margin = totals.collected > 0 ? totals.profit / totals.collected : null;
 
-        // What the business costs to run each month right now.
+        // What the business costs to run each month right now (today's rates).
         const activeRecurring = expenses.filter((e) => e.kind === 'recurring' && new Date(e.date) <= now && (!e.endDate || new Date(e.endDate) >= now));
-        const monthlySubscriptions = activeRecurring.reduce((t, e) => t + e.amount / (CYCLE_MONTHS[e.billingCycle] || 1), 0);
-        const monthlySalaries = team.reduce((t, m) => t + salaryFor(m, thisMonth), 0);
+        const monthlySubscriptions = activeRecurring.reduce((t, e) => t + conv(e.amount / (CYCLE_MONTHS[e.billingCycle] || 1), e.currency, thisKey), 0);
+        const monthlySalaries = team.reduce((t, m) => t + conv(salaryFor(m, thisMonth), m.currency, thisKey), 0);
 
         const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
         const soon = new Date(today.getTime() + 30 * 86400000);
         const upcoming = expenses
             .filter((e) => e.kind === 'recurring')
-            .map((e) => ({ _id: e._id, title: e.title, vendor: e.vendor, amount: e.amount, billingCycle: e.billingCycle, next: nextCharge(e, today) }))
+            .map((e) => ({
+                _id: e._id, title: e.title, vendor: e.vendor, billingCycle: e.billingCycle, next: nextCharge(e, today),
+                amount: conv(e.amount, e.currency, thisKey), originalAmount: e.amount, originalCurrency: e.currency,
+            }))
             .filter((e) => e.next && e.next <= soon)
             .sort((a, b) => a.next - b.next);
 
@@ -285,7 +309,9 @@ const getOverview = async (req, res) => {
             success: true,
             data: {
                 currency,
-                currencies: currencies.length ? currencies : [currency],
+                usedCurrencies: [...usedCurrencies],
+                fx: latest ? { source: latest.source, asOf: latest.asOf, fetchedAt: latest.fetchedAt, stale: !!latest.stale, used: needsFx } : null,
+                unconverted: [...unconverted],
                 range: { from, to },
                 series,
                 totals,
@@ -305,10 +331,25 @@ const getOverview = async (req, res) => {
     }
 };
 
+// GET /api/finance/fx/rates[?refresh=1] — today's rates (per 1 USD) for the
+// converter and the dashboard's own conversions.
+const getFxRates = async (req, res) => {
+    try {
+        const cached = await fx.getLatest();
+        // A manual refresh is allowed once the cached copy is 10+ minutes old.
+        const latest = req.query.refresh === '1' && Date.now() - new Date(cached.fetchedAt).getTime() > 10 * 60 * 1000
+            ? await fx.getLatest({ force: true })
+            : cached;
+        res.json({ success: true, data: { base: 'USD', rates: latest.rates, source: latest.source, asOf: latest.asOf, fetchedAt: latest.fetchedAt, stale: !!latest.stale } });
+    } catch (error) {
+        fail(res, 502, 'Exchange rates are unavailable right now', error);
+    }
+};
+
 module.exports = {
     listExpenses, createExpense, updateExpense, deleteExpense,
     listTeam, listTeamAccounts, createMember, updateMember, deleteMember,
-    getOverview,
+    getOverview, getFxRates,
     // exported for tests
     chargesBetween, salaryFor,
 };

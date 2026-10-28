@@ -8,13 +8,14 @@ const {
 } = require('../controllers/financeController');
 const {
     listExpenses, createExpense, updateExpense, deleteExpense,
-    listTeam, listTeamAccounts, createMember, updateMember, deleteMember, getOverview,
+    listTeam, listTeamAccounts, createMember, updateMember, deleteMember, getOverview, getFxRates,
 } = require('../controllers/expenseController');
 
 router.use(auth);
 
 router.get('/summary', getSummary);
 router.get('/overview', getOverview);
+router.get('/fx/rates', getFxRates);
 
 router.get('/invoice-settings', getInvoiceSettings);
 router.put('/invoice-settings', updateInvoiceSettings);
