@@ -1,9 +1,10 @@
 const mongoose = require('mongoose');
 
 const lineItemSchema = new mongoose.Schema({
-    description: { type: String, required: true, trim: true },
+    name: { type: String, trim: true, default: '' },        // product or service
+    description: { type: String, trim: true, default: '' }, // what it covers
     quantity: { type: Number, default: 1 },
-    unitPrice: { type: Number, default: 0 },
+    unitPrice: { type: Number, default: 0 }, // 0 → shown as "Free"
     amount: { type: Number, default: 0 }, // quantity * unitPrice (computed on save)
 }, { _id: false });
 
@@ -37,18 +38,31 @@ const invoiceSchema = new mongoose.Schema({
     // Whether the company can see this invoice in the client portal.
     visibleToClient: { type: Boolean, default: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: false },
+
+    // Branded PDF, re-rendered by the dashboard whenever the invoice or its
+    // payments change; the portal backend only streams these bytes.
+    pdf: {
+        data: { type: Buffer, select: false },
+        size: { type: Number },
+        generatedAt: { type: Date },
+    },
 }, { timestamps: true });
 
 invoiceSchema.index({ company: 1, status: 1, createdAt: -1 });
 
 // Keep line-item amounts and totals consistent.
 invoiceSchema.pre('save', function (next) {
-    this.lineItems = (this.lineItems || []).map((li) => ({
-        ...li,
-        amount: Number(li.quantity || 0) * Number(li.unitPrice || 0),
-    }));
+    this.lineItems = (this.lineItems || []).map((li) => {
+        const item = typeof li.toObject === 'function' ? li.toObject() : li;
+        return { ...item, amount: Number(item.quantity || 0) * Number(item.unitPrice || 0) };
+    });
     this.subtotal = this.lineItems.reduce((s, li) => s + Number(li.amount || 0), 0);
     this.total = this.subtotal + Number(this.tax || 0);
+    // A free invoice has nothing to collect, so it is settled once issued.
+    if (this.total === 0 && ['sent', 'partial', 'overdue'].includes(this.status)) {
+        this.status = 'paid';
+        if (!this.paidDate) this.paidDate = new Date();
+    }
     next();
 });
 

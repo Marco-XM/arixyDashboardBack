@@ -15,6 +15,10 @@ const reportSettingsSchema = new mongoose.Schema({
     accentColor: { type: String, trim: true, default: '#4F46E5' },
     // Linked from the PDF sign-off and the report email.
     portalUrl: { type: String, trim: true, default: 'https://www.arixytech.com/portal/reports' },
+    // Printed on invoice PDFs: how to pay (bank account, wallet number…) and
+    // a closing note.
+    invoicePaymentDetails: { type: String, trim: true, default: '' },
+    invoiceNote: { type: String, trim: true, default: 'Thank you for your business.' },
 }, { timestamps: true });
 
 // Atomic upsert so concurrent first requests can't race on the unique key.
