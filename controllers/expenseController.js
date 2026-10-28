@@ -4,6 +4,7 @@ const TeamMember = require('../models/TeamMember');
 const Admin = require('../models/Admin');
 const Invoice = require('../models/Invoice');
 const Payment = require('../models/Payment');
+const Subscription = require('../models/Subscription');
 const fx = require('../utils/fx');
 
 const str = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
@@ -204,20 +205,49 @@ function nextCharge(expense, now) {
     return null;
 }
 
-// GET /api/finance/overview?currency=EGP&months=12 — revenue vs costs per
-// month (cash basis: payments received vs expenses charged + salaries).
-// Every amount, whatever its currency, is converted into `currency` at the
-// exchange rate of the month it falls in (utils/fx.js).
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const parseMonth = (v) => (MONTH_RE.test(String(v || '')) ? new Date(`${v}-01T00:00:00Z`) : null);
+const monthEnd = (m) => new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1) - 1);
+const monthsBetween = (a, b) => (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth());
+
+// Expected income from a client subscription in month `m` (0 outside its
+// active window; annual plans bill in their anniversary month).
+function subscriptionIncome(sub, m) {
+    if (sub.billingCycle === 'one-time') return 0;
+    if (sub.startDate && new Date(sub.startDate) > monthEnd(m)) return 0;
+    if (sub.endDate && new Date(sub.endDate) < m) return 0;
+    if (sub.billingCycle === 'annual') {
+        const anchor = new Date(sub.startDate || sub.createdAt);
+        if (anchor.getUTCMonth() !== m.getUTCMonth()) return 0;
+    }
+    return Number(sub.price?.amount || 0);
+}
+
+// GET /api/finance/overview — revenue vs costs per month (cash basis:
+// payments received vs expenses charged + salaries), plus a forecast.
+//   currency      display currency (default EGP); every amount is converted
+//                 at the exchange rate of the month it falls in (utils/fx.js)
+//   from, to      YYYY-MM range (inclusive, `to` capped at this month), or
+//   months        last N months (default 12) when no range is given
+//   forecast      0–24 months after this month to predict
+//   average=1     add the period's average project income to the forecast
 const getOverview = async (req, res) => {
     try {
         const currency = str(req.query.currency, 8).toUpperCase() || 'EGP';
-        const months = Math.min(36, Math.max(1, num(req.query.months, 12)));
-
         const now = new Date();
         const thisMonth = monthStart(now);
         const thisKey = monthKey(thisMonth);
-        const from = addMonths(thisMonth, -(months - 1));
-        const to = new Date(Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() + 1, 1) - 1);
+
+        let to = parseMonth(req.query.to) || thisMonth;
+        if (to > thisMonth) to = thisMonth;
+        let from = parseMonth(req.query.from);
+        if (!from) from = addMonths(to, -(Math.min(60, Math.max(1, num(req.query.months, 12))) - 1));
+        if (from > to) from = to;
+        if (monthsBetween(from, to) > 59) from = addMonths(to, -59);
+        const months = monthsBetween(from, to) + 1;
+        const rangeEnd = monthEnd(to);
+        const forecastMonths = Math.min(24, Math.max(0, Math.round(num(req.query.forecast, 0))));
+        const includeAverage = req.query.average === '1';
 
         const series = [];
         for (let i = 0; i < months; i += 1) {
@@ -227,8 +257,8 @@ const getOverview = async (req, res) => {
         const byKey = Object.fromEntries(series.map((s) => [s.month, s]));
 
         const [payments, invoices, expenses, team, latest] = await Promise.all([
-            Payment.find({ paidAt: { $gte: from, $lte: to } }).select('amount currency paidAt').lean(),
-            Invoice.find({ status: { $nin: ['draft', 'void'] }, issueDate: { $gte: from, $lte: to } }).select('total currency issueDate').lean(),
+            Payment.find({ paidAt: { $gte: from, $lte: rangeEnd } }).select('amount currency paidAt invoice').lean(),
+            Invoice.find({ status: { $nin: ['draft', 'void'] }, issueDate: { $gte: from, $lte: rangeEnd } }).select('total currency issueDate').lean(),
             Expense.find().lean(),
             TeamMember.find().lean(),
             fx.getLatest().catch((err) => { console.warn('FX unavailable:', err.message); return null; }),
@@ -255,20 +285,20 @@ const getOverview = async (req, res) => {
         payments.forEach((p) => { const k = monthKey(new Date(p.paidAt)); const s = byKey[k]; if (s) s.collected += conv(p.amount, p.currency, k); });
         invoices.forEach((inv) => { const k = monthKey(new Date(inv.issueDate)); const s = byKey[k]; if (s) s.invoiced += conv(inv.total, inv.currency, k); });
 
+        // Costs charged in a month: recurring charges + dated one-off purchases.
+        const expenseCharges = (start, end) => expenses.flatMap((e) => (e.kind === 'recurring'
+            ? chargesBetween(e, start, end).map((d) => ({ e, d }))
+            : (new Date(e.date) >= start && new Date(e.date) <= end ? [{ e, d: new Date(e.date) }] : [])));
+
         const byCategory = {};
         const addCategory = (cat, amount) => { byCategory[cat] = (byCategory[cat] || 0) + amount; };
-        expenses.forEach((e) => {
-            const dates = e.kind === 'recurring'
-                ? chargesBetween(e, from, to)
-                : (new Date(e.date) >= from && new Date(e.date) <= to ? [new Date(e.date)] : []);
-            dates.forEach((d) => {
-                const k = monthKey(d);
-                const s = byKey[k];
-                if (!s) return;
-                const v = conv(e.amount, e.currency, k);
-                s.expenses += v;
-                addCategory(e.category || 'Other', v);
-            });
+        expenseCharges(from, rangeEnd).forEach(({ e, d }) => {
+            const k = monthKey(d);
+            const s = byKey[k];
+            if (!s) return;
+            const v = conv(e.amount, e.currency, k);
+            s.expenses += v;
+            addCategory(e.category || 'Other', v);
         });
         series.forEach((s) => {
             team.forEach((m) => { s.salaries += conv(salaryFor(m, s.start), m.currency, s.month); });
@@ -281,10 +311,10 @@ const getOverview = async (req, res) => {
             delete s.start;
         });
 
-        const sum = (k) => series.reduce((t, s) => t + s[k], 0);
+        const sum = (rows, k) => rows.reduce((t, s) => t + s[k], 0);
         const totals = {
-            collected: sum('collected'), invoiced: sum('invoiced'),
-            expenses: sum('expenses'), salaries: sum('salaries'), costs: sum('costs'),
+            collected: sum(series, 'collected'), invoiced: sum(series, 'invoiced'),
+            expenses: sum(series, 'expenses'), salaries: sum(series, 'salaries'), costs: sum(series, 'costs'),
         };
         totals.profit = totals.collected - totals.costs;
         totals.margin = totals.collected > 0 ? totals.profit / totals.collected : null;
@@ -305,6 +335,77 @@ const getOverview = async (req, res) => {
             .filter((e) => e.next && e.next <= soon)
             .sort((a, b) => a.next - b.next);
 
+        /* ── forecast: the N months after this one, at today's rates ── */
+        let forecast = null;
+        if (forecastMonths > 0) {
+            const fFrom = addMonths(thisMonth, 1);
+            const fTo = monthEnd(addMonths(thisMonth, forecastMonths));
+            const firstKey = monthKey(fFrom);
+            const rows = [];
+            for (let i = 0; i < forecastMonths; i += 1) {
+                const m = addMonths(fFrom, i);
+                rows.push({ month: monthKey(m), start: m, subscriptions: 0, invoices: 0, average: 0, expenses: 0, salaries: 0 });
+            }
+            const fKey = Object.fromEntries(rows.map((r) => [r.month, r]));
+            const cnow = (amount, cur) => conv(amount, cur, thisKey);
+
+            const [clientSubs, open, invoicedPeriods] = await Promise.all([
+                Subscription.find({ status: 'active' }).select('price billingCycle startDate endDate createdAt').lean(),
+                Invoice.find({ status: { $in: ['draft', 'sent', 'partial', 'overdue'] } }).select('total currency dueDate').lean(),
+                Invoice.find({ subscription: { $ne: null }, status: { $ne: 'void' }, 'period.month': { $exists: true } }).select('subscription period').lean(),
+            ]);
+
+            // Unpaid balances (drafts included — they are bills still to send) land in
+            // their due month; overdue or undated ones
+            // are expected in the first forecast month.
+            const paidRows = await Payment.aggregate([
+                { $match: { invoice: { $in: open.map((i) => i._id) } } },
+                { $group: { _id: '$invoice', total: { $sum: '$amount' } } },
+            ]);
+            const paidMap = Object.fromEntries(paidRows.map((p) => [String(p._id), p.total]));
+            open.forEach((inv) => {
+                const balance = Number(inv.total || 0) - (paidMap[String(inv._id)] || 0);
+                if (balance <= 0) return;
+                let k = inv.dueDate ? monthKey(new Date(inv.dueDate)) : firstKey;
+                if (k < firstKey) k = firstKey;
+                if (fKey[k]) fKey[k].invoices += cnow(balance, inv.currency);
+            });
+
+            // Client subscriptions, skipping periods that already have an invoice
+            // (its unpaid balance is counted above).
+            const invoiced = new Set(invoicedPeriods.map((i) => `${i.subscription}:${i.period.year}-${String(i.period.month).padStart(2, '0')}`));
+            clientSubs.forEach((sub) => rows.forEach((r) => {
+                if (invoiced.has(`${sub._id}:${r.month}`)) return;
+                const v = subscriptionIncome(sub, r.start);
+                if (v) r.subscriptions += cnow(v, sub.price?.currency);
+            }));
+
+            // Optional: the period's average monthly income from project
+            // (non-subscription) invoices.
+            let averageProjectIncome = 0;
+            if (includeAverage && payments.length) {
+                const invSubs = await Invoice.find({ _id: { $in: payments.map((p) => p.invoice) } }).select('subscription').lean();
+                const fromSub = new Set(invSubs.filter((i) => i.subscription).map((i) => String(i._id)));
+                const projectTotal = payments
+                    .filter((p) => !fromSub.has(String(p.invoice)))
+                    .reduce((t, p) => t + conv(p.amount, p.currency, monthKey(new Date(p.paidAt))), 0);
+                averageProjectIncome = projectTotal / months;
+                rows.forEach((r) => { r.average = averageProjectIncome; });
+            }
+
+            expenseCharges(fFrom, fTo).forEach(({ e, d }) => { const r = fKey[monthKey(d)]; if (r) r.expenses += cnow(e.amount, e.currency); });
+            rows.forEach((r) => {
+                team.forEach((m) => { r.salaries += cnow(salaryFor(m, r.start), m.currency); });
+                r.income = r.subscriptions + r.invoices + r.average;
+                r.costs = r.expenses + r.salaries;
+                r.profit = r.income - r.costs;
+                delete r.start;
+            });
+            const ft = {};
+            ['subscriptions', 'invoices', 'average', 'income', 'expenses', 'salaries', 'costs', 'profit'].forEach((k) => { ft[k] = sum(rows, k); });
+            forecast = { months: forecastMonths, includeAverage, averageProjectIncome, series: rows, totals: ft };
+        }
+
         res.json({
             success: true,
             data: {
@@ -312,7 +413,7 @@ const getOverview = async (req, res) => {
                 usedCurrencies: [...usedCurrencies],
                 fx: latest ? { source: latest.source, asOf: latest.asOf, fetchedAt: latest.fetchedAt, stale: !!latest.stale, used: needsFx } : null,
                 unconverted: [...unconverted],
-                range: { from, to },
+                range: { from: monthKey(from), to: monthKey(to), months, endsThisMonth: monthKey(to) === thisKey },
                 series,
                 totals,
                 runRate: {
@@ -324,6 +425,7 @@ const getOverview = async (req, res) => {
                 },
                 byCategory: Object.entries(byCategory).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount),
                 upcoming,
+                forecast,
             },
         });
     } catch (error) {
@@ -351,5 +453,5 @@ module.exports = {
     listTeam, listTeamAccounts, createMember, updateMember, deleteMember,
     getOverview, getFxRates,
     // exported for tests
-    chargesBetween, salaryFor,
+    chargesBetween, salaryFor, subscriptionIncome,
 };
