@@ -10,6 +10,8 @@ const salarySchema = new mongoose.Schema({
 
 const teamMemberSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true },
+    // Dashboard account this person was picked from (empty → entered manually).
+    account: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: false },
     role: { type: String, trim: true, default: '' },
     email: { type: String, trim: true, lowercase: true, default: '' },
     currency: { type: String, trim: true, uppercase: true, default: 'EGP' },

@@ -8,7 +8,7 @@ const {
 } = require('../controllers/financeController');
 const {
     listExpenses, createExpense, updateExpense, deleteExpense,
-    listTeam, createMember, updateMember, deleteMember, getOverview,
+    listTeam, listTeamAccounts, createMember, updateMember, deleteMember, getOverview,
 } = require('../controllers/expenseController');
 
 router.use(auth);
@@ -37,6 +37,7 @@ router.put('/expenses/:id', updateExpense);
 router.delete('/expenses/:id', deleteExpense);
 
 router.get('/team', listTeam);
+router.get('/team/accounts', listTeamAccounts);
 router.post('/team', createMember);
 router.put('/team/:id', updateMember);
 router.delete('/team/:id', deleteMember);

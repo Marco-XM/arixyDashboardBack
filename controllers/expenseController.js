@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
 const TeamMember = require('../models/TeamMember');
+const Admin = require('../models/Admin');
 const Invoice = require('../models/Invoice');
 const Payment = require('../models/Payment');
 
@@ -95,6 +96,7 @@ const deleteExpense = async (req, res) => {
 function sanitizeMember(b = {}) {
     const out = {};
     if (b.name !== undefined) out.name = str(b.name, 120);
+    if (b.account !== undefined) out.account = mongoose.isValidObjectId(String(b.account || '')) ? b.account : null;
     if (b.role !== undefined) out.role = str(b.role, 120);
     if (b.email !== undefined) out.email = str(b.email, 200);
     if (b.currency !== undefined) out.currency = str(b.currency, 8).toUpperCase() || 'EGP';
@@ -115,6 +117,16 @@ const listTeam = async (req, res) => {
         res.json({ success: true, data });
     } catch (error) {
         fail(res, 500, 'Error fetching team', error);
+    }
+};
+
+// GET /api/finance/team/accounts — dashboard accounts to pick team members from.
+const listTeamAccounts = async (req, res) => {
+    try {
+        const data = await Admin.find().select('name email username').sort({ name: 1 }).lean();
+        res.json({ success: true, data });
+    } catch (error) {
+        fail(res, 500, 'Error fetching accounts', error);
     }
 };
 
@@ -295,7 +307,7 @@ const getOverview = async (req, res) => {
 
 module.exports = {
     listExpenses, createExpense, updateExpense, deleteExpense,
-    listTeam, createMember, updateMember, deleteMember,
+    listTeam, listTeamAccounts, createMember, updateMember, deleteMember,
     getOverview,
     // exported for tests
     chargesBetween, salaryFor,
