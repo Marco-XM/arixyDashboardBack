@@ -116,7 +116,8 @@ function buildDocument(lib, { invoice, company, branding, brandLogo, clientLogo,
     const amountCaption = { free: 'Total', paid: 'Total paid', void: 'Amount' }[state.key] || 'Amount due';
 
     const hero = h(View, {
-        style: { marginTop: -(HEADER_H + 20), marginHorizontal: -PAD_X, backgroundColor: C.ink, position: 'relative' },
+        // Clip the glows so they never bleed onto the white page below.
+        style: { marginTop: -(HEADER_H + 20), marginHorizontal: -PAD_X, backgroundColor: C.ink, position: 'relative', overflow: 'hidden' },
     },
     h(Svg, { width: 360, height: 360, style: { position: 'absolute', top: -140, right: -100 } },
         h(Defs, null,
@@ -124,7 +125,7 @@ function buildDocument(lib, { invoice, company, branding, brandLogo, clientLogo,
                 h(Stop, { offset: '0%', stopColor: '#8B5CF6', stopOpacity: 0.5 }),
                 h(Stop, { offset: '100%', stopColor: '#8B5CF6', stopOpacity: 0 }))),
         h(Circle, { cx: 180, cy: 180, r: 180, fill: 'url(#glowViolet)' })),
-    h(Svg, { width: 240, height: 240, style: { position: 'absolute', top: 60, right: 170 } },
+    h(Svg, { width: 240, height: 240, style: { position: 'absolute', top: -20, right: 170 } },
         h(Defs, null,
             h(RadialGradient, { id: 'glowCyan', cx: '50%', cy: '50%', r: '50%' },
                 h(Stop, { offset: '0%', stopColor: '#22D3EE', stopOpacity: 0.2 }),
