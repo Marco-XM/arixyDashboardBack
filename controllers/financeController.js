@@ -42,12 +42,19 @@ async function renderFor(invoice) {
     return { buffer, company };
 }
 
-// Re-render the stored copy the client downloads from the portal. A render
-// failure must not undo the change that triggered it, so it is only logged.
+// Re-render the stored copy the client downloads from the portal and re-lock
+// the total's home-currency value at the issue date's rate. A failure must
+// not undo the change that triggered it, so it is only logged.
 async function refreshPdf(invoiceId) {
     try {
         const invoice = await Invoice.findById(invoiceId).lean();
         if (!invoice) return;
+        // Keep an existing lock unless the total, currency or issue date changed.
+        const issued = new Date(invoice.issueDate || invoice.createdAt);
+        if (!fx.lockMatches(invoice.fx, invoice.total, invoice.currency, issued)) {
+            const locked = await fx.lockFx(invoice.total, invoice.currency, issued);
+            if (locked) await Invoice.updateOne({ _id: invoiceId }, { $set: { fx: locked } });
+        }
         const { buffer } = await renderFor(invoice);
         await Invoice.updateOne({ _id: invoiceId }, { $set: { pdf: { data: buffer, size: buffer.length, generatedAt: new Date() } } });
     } catch (err) {
@@ -327,13 +334,17 @@ const recordPayment = async (req, res) => {
         const invoice = await Invoice.findById(req.params.id);
         if (!invoice) return res.status(404).json({ success: false, message: 'Invoice not found' });
 
-        const { amount, method, reference, paidAt, notes } = req.body;
+        const { amount, method, reference, paidAt, notes, amountHome } = req.body;
         if (!amount || Number(amount) <= 0) return res.status(400).json({ success: false, message: 'A positive amount is required' });
 
+        // Lock the home-currency value at the payment date's rate, or the
+        // amount actually received when it was entered.
+        const when = paidAt ? new Date(paidAt) : new Date();
         await Payment.create({
             invoice: invoice._id, company: invoice.company, amount: Number(amount),
             currency: invoice.currency, method: method || 'bank', reference: reference || '',
-            paidAt: paidAt || Date.now(), notes: notes || '', recordedBy: req.user?._id,
+            paidAt: when, notes: notes || '', recordedBy: req.user?._id,
+            fx: await fx.lockFx(Number(amount), invoice.currency, when, amountHome),
         });
 
         const amountPaid = await amountPaidFor(invoice._id);
@@ -351,41 +362,48 @@ const recordPayment = async (req, res) => {
 
 /* ------------------------------- Summary --------------------------------- */
 
-// GET /api/finance/summary?currency=EGP[&company=] — totals converted into
-// one currency at today's exchange rates.
+// GET /api/finance/summary?currency=EGP[&company=] — totals in one currency.
+// Invoices and payments count at the home-currency value locked when they
+// were saved; only a display currency other than the home one (or an old
+// record without a lock) is converted, at today's rates.
 const getSummary = async (req, res) => {
     try {
         const { company } = req.query;
         const currency = str(req.query.currency, 8).toUpperCase() || 'EGP';
         const match = company ? { company: new mongoose.Types.ObjectId(String(company)) } : {};
 
-        const [byStatus, paidAgg] = await Promise.all([
-            Invoice.aggregate([{ $match: match }, { $group: { _id: { status: '$status', currency: '$currency' }, count: { $sum: 1 }, total: { $sum: '$total' } } }]),
-            Payment.aggregate([{ $match: match }, { $group: { _id: '$currency', collected: { $sum: '$amount' } } }]),
+        const [invoices, payments] = await Promise.all([
+            Invoice.find(match).select('status total currency fx').lean(),
+            Payment.find(match).select('amount currency fx').lean(),
         ]);
 
-        const foreign = [...byStatus.map((r) => r._id.currency), ...paidAgg.map((r) => r._id)].some((c) => c && c.toUpperCase() !== currency);
-        const latest = foreign ? await fx.getLatest().catch(() => null) : null;
+        // Value of a record in the display currency.
+        const valueOf = (doc, amount) => {
+            const cur = String(doc.currency || currency).toUpperCase();
+            if (cur === currency) return { amount, cur: currency };
+            if (doc.fx?.home && Number.isFinite(doc.fx.amountHome)) return { amount: doc.fx.amountHome, cur: doc.fx.home };
+            return { amount, cur };
+        };
+        const parts = [...invoices.map((i) => valueOf(i, i.total)), ...payments.map((p) => valueOf(p, p.amount))];
+        const latest = parts.some((p) => p.cur !== currency) ? await fx.getLatest().catch(() => null) : null;
         const unconverted = new Set();
-        const conv = (amount, cur) => {
-            const c = String(cur || currency).toUpperCase();
-            const v = c === currency ? amount : fx.convert(amount, c, currency, latest?.rates);
-            if (v === null) { unconverted.add(c); return 0; }
+        const conv = ({ amount, cur }) => {
+            const v = cur === currency ? amount : fx.convert(amount, cur, currency, latest?.rates);
+            if (v === null) { unconverted.add(cur); return 0; }
             return v;
         };
 
         const statuses = {};
         let invoiced = 0;
-        let invoiceCount = 0;
-        byStatus.forEach((r) => {
-            const v = conv(r.total, r._id.currency);
+        invoices.forEach((inv) => {
+            const v = conv(valueOf(inv, inv.total));
             invoiced += v;
-            invoiceCount += r.count;
-            const s = statuses[r._id.status] || (statuses[r._id.status] = { count: 0, total: 0 });
-            s.count += r.count;
+            const s = statuses[inv.status] || (statuses[inv.status] = { count: 0, total: 0 });
+            s.count += 1;
             s.total += v;
         });
-        const collected = paidAgg.reduce((t, r) => t + conv(r.collected, r._id), 0);
+        const invoiceCount = invoices.length;
+        const collected = payments.reduce((t, p) => t + conv(valueOf(p, p.amount)), 0);
 
         res.json({
             success: true,

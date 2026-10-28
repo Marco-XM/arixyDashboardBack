@@ -8,6 +8,17 @@ const lineItemSchema = new mongoose.Schema({
     amount: { type: Number, default: 0 }, // quantity * unitPrice (computed on save)
 }, { _id: false });
 
+// Value locked in the home currency when the record was saved (utils/fx.js
+// lockFx), so later rate moves never change it.
+const lockedFxSchema = new mongoose.Schema({
+    home: { type: String },          // home currency, e.g. EGP
+    rate: { type: Number },          // home units per 1 unit of the record's currency
+    amountHome: { type: Number },    // the amount in the home currency
+    date: { type: Date },            // rate date (transaction date)
+    source: { type: String },
+    manual: { type: Boolean, default: false }, // entered as the actual amount charged/received
+}, { _id: false });
+
 // A bill sent to a company — either recurring maintenance (tied to a subscription
 // + period) or a one-off project fee.
 const invoiceSchema = new mongoose.Schema({
@@ -22,6 +33,8 @@ const invoiceSchema = new mongoose.Schema({
     tax: { type: Number, default: 0 },      // absolute tax amount
     total: { type: Number, default: 0 },
     currency: { type: String, default: 'USD' },
+    // Total locked in the home currency at the issue date's rate.
+    fx: { type: lockedFxSchema, default: undefined },
 
     status: { type: String, enum: ['draft', 'sent', 'paid', 'partial', 'overdue', 'void'], default: 'draft' },
     issueDate: { type: Date, default: Date.now },

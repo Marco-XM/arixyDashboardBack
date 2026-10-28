@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+
+// Value locked in the home currency when the record was saved (utils/fx.js
+// lockFx), so later rate moves never change it.
+const lockedFxSchema = new mongoose.Schema({
+    home: { type: String },          // home currency, e.g. EGP
+    rate: { type: Number },          // home units per 1 unit of the record's currency
+    amountHome: { type: Number },    // the amount in the home currency
+    date: { type: Date },            // rate date (transaction date)
+    source: { type: String },
+    manual: { type: Boolean, default: false }, // entered as the actual amount charged/received
+}, { _id: false });
+
 // Money Arixy spends: a one-off purchase (hardware, a licence, an ad budget)
 // or a recurring subscription (hosting, SaaS seats, domains). Recurring
 // expenses are charged every cycle from `date` until `endDate` (when the
@@ -20,6 +32,8 @@ const expenseSchema = new mongoose.Schema({
     company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: false },
     paymentMethod: { type: String, trim: true, default: '' },
     notes: { type: String, trim: true, default: '' },
+    // One-time purchases only (recurring charges use each charge date's rate).
+    fx: { type: lockedFxSchema, default: undefined },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: false },
 }, { timestamps: true });
 

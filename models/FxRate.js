@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 
 // Cached exchange rates, all relative to 1 USD. `key` is 'latest' (refreshed
-// automatically once it is a few hours old) or 'YYYY-MM' for a past month's
-// rate, which never changes once stored.
+// automatically once it is a few hours old) or 'YYYY-MM-DD' for a past day's
+// rates, which never change once stored.
 const fxRateSchema = new mongoose.Schema({
     key: { type: String, required: true, unique: true },
     base: { type: String, default: 'USD' },

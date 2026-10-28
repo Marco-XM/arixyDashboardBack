@@ -59,12 +59,26 @@ const listExpenses = async (req, res) => {
     }
 };
 
+// One-time purchases lock their home-currency value at the purchase date's
+// rate, or the actual amount charged when `amountHome` is given; an unchanged
+// purchase keeps its lock. Recurring ones have no lock (each charge uses its
+// own date's rate).
+async function lockExpense(expense, amountHome) {
+    if (expense.kind !== 'one-time') { expense.fx = undefined; return; }
+    const manual = amountHome !== undefined && amountHome !== null && amountHome !== '';
+    if (!manual && amountHome === undefined && expense.fx?.manual) return; // field not sent: keep
+    if (!manual && fx.lockMatches(expense.fx, expense.amount, expense.currency, expense.date)) return;
+    expense.fx = await fx.lockFx(expense.amount, expense.currency, expense.date, manual ? amountHome : undefined);
+}
+
 const createExpense = async (req, res) => {
     try {
         const input = sanitizeExpense(req.body);
         if (!input.title) return fail(res, 400, 'A name is required');
         if (input.amount === undefined) return fail(res, 400, 'An amount is required');
-        const expense = await Expense.create({ ...input, createdBy: req.user?._id });
+        const expense = new Expense({ ...input, createdBy: req.user?._id });
+        await lockExpense(expense, req.body.amountHome);
+        await expense.save();
         res.status(201).json({ success: true, message: 'Expense added', data: expense });
     } catch (error) {
         fail(res, 500, 'Error adding expense', error);
@@ -75,8 +89,11 @@ const updateExpense = async (req, res) => {
     try {
         const input = sanitizeExpense(req.body);
         if (input.title === '') return fail(res, 400, 'A name is required');
-        const expense = await Expense.findByIdAndUpdate(req.params.id, { $set: input }, { new: true, runValidators: true });
+        const expense = await Expense.findById(req.params.id);
         if (!expense) return fail(res, 404, 'Expense not found');
+        expense.set(input);
+        await lockExpense(expense, req.body.amountHome);
+        await expense.save();
         res.json({ success: true, message: 'Expense updated', data: expense });
     } catch (error) {
         fail(res, 500, 'Error updating expense', error);
@@ -257,46 +274,70 @@ const getOverview = async (req, res) => {
         const byKey = Object.fromEntries(series.map((s) => [s.month, s]));
 
         const [payments, invoices, expenses, team, latest] = await Promise.all([
-            Payment.find({ paidAt: { $gte: from, $lte: rangeEnd } }).select('amount currency paidAt invoice').lean(),
-            Invoice.find({ status: { $nin: ['draft', 'void'] }, issueDate: { $gte: from, $lte: rangeEnd } }).select('total currency issueDate').lean(),
+            Payment.find({ paidAt: { $gte: from, $lte: rangeEnd } }).select('amount currency paidAt invoice fx').lean(),
+            Invoice.find({ status: { $nin: ['draft', 'void'] }, issueDate: { $gte: from, $lte: rangeEnd } }).select('total currency issueDate fx').lean(),
             Expense.find().lean(),
             TeamMember.find().lean(),
             fx.getLatest().catch((err) => { console.warn('FX unavailable:', err.message); return null; }),
         ]);
 
-        // Month rates are only needed when some amount is in another currency.
-        const usedCurrencies = new Set([...payments, ...invoices, ...expenses, ...team].map((x) => String(x.currency || '').toUpperCase()).filter(Boolean));
-        const needsFx = [...usedCurrencies].some((c) => c !== currency);
-        const monthRates = {};
-        if (needsFx) {
-            await Promise.all(series.map(async (s) => {
-                monthRates[s.month] = s.month === thisKey ? latest : await fx.getMonth(s.month).catch(() => latest);
-            }));
-        }
-        const unconverted = new Set();
-        const conv = (amount, cur, key) => {
-            const c = String(cur || currency).toUpperCase();
-            if (c === currency) return Number(amount || 0);
-            const v = fx.convert(amount, c, currency, (monthRates[key] || latest)?.rates);
-            if (v === null) { unconverted.add(c); return 0; }
-            return v;
-        };
-
-        payments.forEach((p) => { const k = monthKey(new Date(p.paidAt)); const s = byKey[k]; if (s) s.collected += conv(p.amount, p.currency, k); });
-        invoices.forEach((inv) => { const k = monthKey(new Date(inv.issueDate)); const s = byKey[k]; if (s) s.invoiced += conv(inv.total, inv.currency, k); });
-
         // Costs charged in a month: recurring charges + dated one-off purchases.
         const expenseCharges = (start, end) => expenses.flatMap((e) => (e.kind === 'recurring'
             ? chargesBetween(e, start, end).map((d) => ({ e, d }))
             : (new Date(e.date) >= start && new Date(e.date) <= end ? [{ e, d: new Date(e.date) }] : [])));
+        const charges = expenseCharges(from, rangeEnd);
+
+        // Rates are only needed when some amount is in another currency:
+        // the rate of each transaction's own day, and each month's rate for
+        // salaries. Past days/months are stored, so these never change.
+        const usedCurrencies = new Set([...payments, ...invoices, ...expenses, ...team].map((x) => String(x.currency || '').toUpperCase()).filter(Boolean));
+        const needsFx = [...usedCurrencies].some((c) => c !== currency);
+        const monthRates = {};
+        const dayRates = {};
+        if (needsFx) {
+            const days = new Set([
+                ...payments.map((p) => fx.dayKeyOf(p.paidAt)),
+                ...invoices.map((i) => fx.dayKeyOf(i.issueDate)),
+                ...charges.map(({ d }) => fx.dayKeyOf(d)),
+            ]);
+            await Promise.all([
+                ...series.map(async (s) => { monthRates[s.month] = await fx.getMonth(s.month).catch(() => latest); }),
+                ...[...days].map(async (k) => { dayRates[k] = await fx.getDay(k).catch(() => latest); }),
+            ]);
+        }
+        const unconverted = new Set();
+        const convWith = (amount, cur, rates) => {
+            const c = String(cur || currency).toUpperCase();
+            if (c === currency) return Number(amount || 0);
+            const v = fx.convert(amount, c, currency, rates);
+            if (v === null) { unconverted.add(c); return 0; }
+            return v;
+        };
+        const conv = (amount, cur, key) => convWith(amount, cur, (monthRates[key] || latest)?.rates);
+        const convNow = (amount, cur) => convWith(amount, cur, latest?.rates);
+        const convDay = (amount, cur, date) => convWith(amount, cur, (dayRates[fx.dayKeyOf(date)] || latest)?.rates);
+        // Payments, invoices and one-time purchases use the home-currency value
+        // locked when they were saved; older records without a lock fall back
+        // to their own day's (stored) rate.
+        const convLocked = (doc, amount, cur, date) => {
+            if (String(cur || currency).toUpperCase() === currency) return Number(amount || 0);
+            const f = doc.fx;
+            if (f && f.home && Number.isFinite(f.amountHome)) {
+                return f.home === currency ? f.amountHome : convDay(f.amountHome, f.home, date);
+            }
+            return convDay(amount, cur, date);
+        };
+
+        payments.forEach((p) => { const s = byKey[monthKey(new Date(p.paidAt))]; if (s) s.collected += convLocked(p, p.amount, p.currency, p.paidAt); });
+        invoices.forEach((inv) => { const s = byKey[monthKey(new Date(inv.issueDate))]; if (s) s.invoiced += convLocked(inv, inv.total, inv.currency, inv.issueDate); });
 
         const byCategory = {};
         const addCategory = (cat, amount) => { byCategory[cat] = (byCategory[cat] || 0) + amount; };
-        expenseCharges(from, rangeEnd).forEach(({ e, d }) => {
+        charges.forEach(({ e, d }) => {
             const k = monthKey(d);
             const s = byKey[k];
             if (!s) return;
-            const v = conv(e.amount, e.currency, k);
+            const v = e.kind === 'recurring' ? convDay(e.amount, e.currency, d) : convLocked(e, e.amount, e.currency, d);
             s.expenses += v;
             addCategory(e.category || 'Other', v);
         });
@@ -321,8 +362,8 @@ const getOverview = async (req, res) => {
 
         // What the business costs to run each month right now (today's rates).
         const activeRecurring = expenses.filter((e) => e.kind === 'recurring' && new Date(e.date) <= now && (!e.endDate || new Date(e.endDate) >= now));
-        const monthlySubscriptions = activeRecurring.reduce((t, e) => t + conv(e.amount / (CYCLE_MONTHS[e.billingCycle] || 1), e.currency, thisKey), 0);
-        const monthlySalaries = team.reduce((t, m) => t + conv(salaryFor(m, thisMonth), m.currency, thisKey), 0);
+        const monthlySubscriptions = activeRecurring.reduce((t, e) => t + convNow(e.amount / (CYCLE_MONTHS[e.billingCycle] || 1), e.currency), 0);
+        const monthlySalaries = team.reduce((t, m) => t + convNow(salaryFor(m, thisMonth), m.currency), 0);
 
         const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
         const soon = new Date(today.getTime() + 30 * 86400000);
@@ -330,7 +371,7 @@ const getOverview = async (req, res) => {
             .filter((e) => e.kind === 'recurring')
             .map((e) => ({
                 _id: e._id, title: e.title, vendor: e.vendor, billingCycle: e.billingCycle, next: nextCharge(e, today),
-                amount: conv(e.amount, e.currency, thisKey), originalAmount: e.amount, originalCurrency: e.currency,
+                amount: convNow(e.amount, e.currency), originalAmount: e.amount, originalCurrency: e.currency,
             }))
             .filter((e) => e.next && e.next <= soon)
             .sort((a, b) => a.next - b.next);
@@ -347,7 +388,7 @@ const getOverview = async (req, res) => {
                 rows.push({ month: monthKey(m), start: m, subscriptions: 0, invoices: 0, average: 0, expenses: 0, salaries: 0 });
             }
             const fKey = Object.fromEntries(rows.map((r) => [r.month, r]));
-            const cnow = (amount, cur) => conv(amount, cur, thisKey);
+            const cnow = convNow;
 
             const [clientSubs, open, invoicedPeriods] = await Promise.all([
                 Subscription.find({ status: 'active' }).select('price billingCycle startDate endDate createdAt').lean(),
@@ -388,7 +429,7 @@ const getOverview = async (req, res) => {
                 const fromSub = new Set(invSubs.filter((i) => i.subscription).map((i) => String(i._id)));
                 const projectTotal = payments
                     .filter((p) => !fromSub.has(String(p.invoice)))
-                    .reduce((t, p) => t + conv(p.amount, p.currency, monthKey(new Date(p.paidAt))), 0);
+                    .reduce((t, p) => t + convLocked(p, p.amount, p.currency, p.paidAt), 0);
                 averageProjectIncome = projectTotal / months;
                 rows.forEach((r) => { r.average = averageProjectIncome; });
             }
