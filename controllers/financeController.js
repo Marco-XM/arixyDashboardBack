@@ -23,7 +23,15 @@ function sanitizeLineItems(items) {
         .filter((li) => li.name || li.description);
 }
 
-const nextInvoiceNumber = () => InvoiceCounter.next(new Date().getUTCFullYear());
+// Next automatic number, skipping any that already exist (e.g. typed by hand).
+async function nextInvoiceNumber() {
+    const year = new Date().getUTCFullYear();
+    for (let i = 0; i < 50; i += 1) {
+        const number = await InvoiceCounter.next(year); // eslint-disable-line no-await-in-loop
+        if (!(await Invoice.exists({ number }))) return number; // eslint-disable-line no-await-in-loop
+    }
+    throw new Error('Could not find a free invoice number');
+}
 
 /* --------------------------------- PDFs ---------------------------------- */
 
@@ -303,10 +311,27 @@ const previewInvoice = async (req, res) => {
 
 // GET/PUT /api/finance/invoice-settings — payment details + closing note
 // printed on invoices (logo, name and colours come from report branding).
+// Numbering state for this year: the next automatic number and the highest
+// INV-<year>-NNNN already used (the next number must stay above it).
+async function numberingState() {
+    const year = new Date().getUTCFullYear();
+    const [counter, used] = await Promise.all([
+        InvoiceCounter.findOne({ year }).lean(),
+        Invoice.find({ number: new RegExp(`^INV-${year}-\\d+$`) }).select('number').lean(),
+    ]);
+    const highestUsed = used.reduce((m, i) => Math.max(m, Number(i.number.split('-')[2]) || 0), 0);
+    return { year, nextNumber: Math.max(counter?.seq || 0, highestUsed) + 1, highestUsed };
+}
+
+const settingsPayload = async (s) => ({
+    invoicePaymentDetails: s.invoicePaymentDetails || '',
+    invoiceNote: s.invoiceNote || '',
+    ...(await numberingState()),
+});
+
 const getInvoiceSettings = async (req, res) => {
     try {
-        const s = await getBranding();
-        res.json({ success: true, data: { invoicePaymentDetails: s.invoicePaymentDetails || '', invoiceNote: s.invoiceNote || '' } });
+        res.json({ success: true, data: await settingsPayload(await getBranding()) });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error loading invoice settings', error: error.message });
     }
@@ -314,14 +339,34 @@ const getInvoiceSettings = async (req, res) => {
 
 const updateInvoiceSettings = async (req, res) => {
     try {
+        // Next invoice number for this year (the counter stores the last one used).
+        if (req.body.nextNumber !== undefined && req.body.nextNumber !== '') {
+            const next = Number(req.body.nextNumber);
+            if (!Number.isInteger(next) || next < 1 || next > 999999) {
+                return res.status(400).json({ success: false, message: 'The next invoice number must be a whole number from 1 to 999999' });
+            }
+            const { year, highestUsed } = await numberingState();
+            if (next <= highestUsed) {
+                return res.status(400).json({
+                    success: false,
+                    message: `INV-${year}-${String(highestUsed).padStart(4, '0')} is already used, so the next number must be ${highestUsed + 1} or higher`,
+                });
+            }
+            await InvoiceCounter.updateOne({ year }, { $set: { seq: next - 1 } }, { upsert: true });
+        }
+
         const settings = await ReportSettings.getSingleton();
+        const before = `${settings.invoicePaymentDetails}\n${settings.invoiceNote}`;
         if (req.body.invoicePaymentDetails !== undefined) settings.invoicePaymentDetails = str(req.body.invoicePaymentDetails, 2000);
         if (req.body.invoiceNote !== undefined) settings.invoiceNote = str(req.body.invoiceNote, 300);
         await settings.save();
-        // Unpaid invoices print the payment details, so refresh their PDFs.
-        const unpaid = await Invoice.find({ status: { $in: ['sent', 'partial', 'overdue'] } }).select('_id').lean();
-        for (const inv of unpaid) await refreshPdf(inv._id); // eslint-disable-line no-await-in-loop
-        res.json({ success: true, message: 'Invoice settings saved', data: { invoicePaymentDetails: settings.invoicePaymentDetails, invoiceNote: settings.invoiceNote } });
+        // Invoice PDFs print the payment details and note, so refresh the
+        // unpaid ones when those changed.
+        if (`${settings.invoicePaymentDetails}\n${settings.invoiceNote}` !== before) {
+            const unpaid = await Invoice.find({ status: { $in: ['draft', 'sent', 'partial', 'overdue'] } }).select('_id').lean();
+            for (const inv of unpaid) await refreshPdf(inv._id); // eslint-disable-line no-await-in-loop
+        }
+        res.json({ success: true, message: 'Invoice settings saved', data: await settingsPayload(settings) });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error saving invoice settings', error: error.message });
     }
